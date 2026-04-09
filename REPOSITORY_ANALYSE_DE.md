@@ -1,336 +1,261 @@
 # 1. Kurzfassung
-
-Dieses Repository ist der **ModSecurity-nginx-Connector**: ein nginx-Modul, das nginx mit **libmodsecurity (ModSecurity v3)** verbindet. Es enthält nicht die eigentliche WAF-Regelengine, sondern vor allem Brückenlogik (Daten aus nginx lesen, an libmodsecurity übergeben, Interventionsentscheidung in nginx umsetzen). Die Kernlogik ist in C implementiert (`src/*.c`), ergänzt durch Header (`src/*.h`) und nginx-Buildintegration (`config`). Das Modul registriert sich in Access- und Log-Phase sowie als Header-/Body-Filter. Es definiert Konfigurationsdirektiven wie `modsecurity`, `modsecurity_rules*`, `modsecurity_transaction_id` und `modsecurity_use_error_log`. Tests liegen als nginx-Testfälle in Perl vor (`tests/*.t`).
-
----
+Dieses Repository ist ein nginx-Connector-Modul für ModSecurity v3 (libmodsecurity) und nicht die WAF-Engine selbst. Die README beschreibt es ausdrücklich als Verbindungspunkt zwischen nginx und libmodsecurity. Der Connector liest Daten aus nginx-Request/Response-Strukturen und ruft damit libmodsecurity-Funktionen auf. Wenn libmodsecurity eine Intervention meldet, setzt der Connector diese Entscheidung in nginx (Statuscode/Redirect) um. Die Kernlogik ist in C implementiert (`src/*.c`, `src/*.h`), Tests sind überwiegend Perl-Dateien (`tests/*.t`), und die nginx-Build-Einbindung liegt in `config`. Im Code ist kein JSON-Serialisierungsfluss als Austauschmodell sichtbar; stattdessen sind viele einzelne API-Aufrufe mit Strings, Längen und Pointern erkennbar. Header werden paarweise übergeben, Body-Daten chunk-weise oder dateibasiert, und Metadaten (URI/Methode/Version/Status) per separaten Funktionsaufrufen. Diese Aussagen sind direkt im Connector-Code nachvollziehbar. 【F:README.md†L8-L13】【F:src/ngx_http_modsecurity_access.c†L215-L226】【F:src/ngx_http_modsecurity_access.c†L262-L267】【F:src/ngx_http_modsecurity_access.c†L394-L419】【F:src/ngx_http_modsecurity_header_filter.c†L503-L531】【F:config†L90-L161】
 
 # 2. Einfache Erklärung für Einsteiger
+Der Connector ist ein Adapter zwischen nginx und libmodsecurity:
+- nginx hat die HTTP-Anfrage/-Antwort.
+- libmodsecurity trifft Sicherheitsentscheidungen.
+- dieses Repo verbindet beides.
 
-Du hast drei Bausteine:
+Was praktisch passiert:
+1. Das Modul hängt sich in nginx-Phasen/Filter ein.
+2. Es nimmt Felder aus nginx (z. B. URI, Methode, Header, Body).
+3. Es ruft dazu passende libmodsecurity-APIs auf.
+4. Es fragt, ob eine Intervention vorliegt (z. B. blocken/redirect).
+5. Falls ja, setzt es das Ergebnis in nginx um.
 
-1. **nginx** nimmt HTTP-Anfragen an und liefert Antworten.
-2. **libmodsecurity** ist die WAF-Engine (Regeln auswerten, Blocken/Redirect entscheiden).
-3. **dieses Repo** verbindet beide.
-
-Der Connector liest Request-/Response-Daten aus nginx (Methode, URI, Header, Body) und ruft damit libmodsecurity auf. Danach fragt er: „Gibt es eine Intervention?“ Wenn ja, setzt er z. B. einen Statuscode oder Redirect in nginx. Wenn nein, läuft alles normal weiter.
-
-Wichtig: Die eigentliche Sicherheitslogik (Regeln, Matching, Transformationen) ist in libmodsecurity, nicht in diesem Repo.
-
----
+Wichtig zur Formatfrage: Im sichtbaren Connector-Code wird **kein JSON gebaut oder geparst**. Stattdessen werden Daten **feldweise per API** übergeben (z. B. URI separat, Header als Key/Value-Paare, Body als Bytes/Chunks oder aus Datei). Ein einheitliches Austauschformat (eine einzige serialisierte Nachricht) ist im Repo nicht sichtbar. 【F:src/ngx_http_modsecurity_module.c†L567-L624】【F:src/ngx_http_modsecurity_access.c†L215-L226】【F:src/ngx_http_modsecurity_access.c†L262-L267】【F:src/ngx_http_modsecurity_access.c†L406-L419】【F:src/ngx_http_modsecurity_module.c†L159-L162】【F:src/ngx_http_modsecurity_module.c†L182-L221】
 
 # 3. Technische Tiefenanalyse
-
 ## 3.1 Zweck des Repos
-
-**Beleg:** `README.md`, Einleitung.
-- Das README bezeichnet das Projekt explizit als Verbindungspunkt zwischen nginx und libmodsecurity.
-- Es sagt auch klar: dieses Projekt hängt von **libmodsecurity** ab, nicht von ModSecurity 2.x.
+- README: „connection point“ zwischen nginx und libmodsecurity; Modul ist nötig, um LibModSecurity mit nginx zu verwenden. 【F:README.md†L8-L13】
+- Das Repo ist Connector-/Integrationslogik, nicht komplette WAF-Engine. 【F:README.md†L8-L13】【F:src/ngx_http_modsecurity_common.h†L25-L27】
 
 ## 3.2 Sprache und Repo-Struktur
-
-**Beleg:** Dateibaum + Quelltexte.
-- Kernlogik: C (`src/ngx_http_modsecurity_*.c`)
-- Header/Strukturen: C-Header (`src/ngx_http_modsecurity_common.h`, `src/ddebug.h`)
-- Buildintegration: nginx-addon-Skript `config`
-- Tests: Perl (`tests/*.t`, `Test::Nginx`)
-- Zusatz: Windows-Builddoku (`win32/README.md`)
+- Kernlogik: C (`src/ngx_http_modsecurity_*.c`). 【F:config†L119-L124】
+- Header: C (`src/ngx_http_modsecurity_common.h`). 【F:src/ngx_http_modsecurity_common.h†L17-L27】
+- Buildintegration: `config` (nginx-addon-Skript). 【F:config†L1-L2】【F:config†L90-L161】
+- Tests: Perl + Test::Nginx (`tests/*.t`). 【F:tests/modsecurity.t†L22-L31】
+- Windows-Buildhinweise separat in `win32/README.md`. 【F:win32/README.md†L1-L10】
 
 ## 3.3 Zentrale Dateien
-
-- `src/ngx_http_modsecurity_module.c`: Moduldefinition, Direktiven, Konfigurationen, Hook-Registrierung, Intervention-Handling.
-- `src/ngx_http_modsecurity_access.c`: Request-Verarbeitung inkl. Connection/URI/Header/Body an libmodsecurity.
-- `src/ngx_http_modsecurity_header_filter.c`: Response-Header an libmodsecurity.
-- `src/ngx_http_modsecurity_body_filter.c`: Response-Body an libmodsecurity.
-- `src/ngx_http_modsecurity_log.c`: Logging-Brücke und Log-Phase-Handler.
-- `src/ngx_http_modsecurity_common.h`: zentrale Kontext- und Config-Strukturen.
+- `src/ngx_http_modsecurity_module.c`: Moduldefinition, Direktiven, Hook-Registrierung, Config-Erzeugung/-Merge, Intervention-Umsetzung. 【F:src/ngx_http_modsecurity_module.c†L483-L564】【F:src/ngx_http_modsecurity_module.c†L567-L624】【F:src/ngx_http_modsecurity_module.c†L697-L788】【F:src/ngx_http_modsecurity_module.c†L140-L247】
+- `src/ngx_http_modsecurity_access.c`: Request-Lesepfad und Übergabe an libmodsecurity. 【F:src/ngx_http_modsecurity_access.c†L46-L57】【F:src/ngx_http_modsecurity_access.c†L162-L166】【F:src/ngx_http_modsecurity_access.c†L215-L226】
+- `src/ngx_http_modsecurity_header_filter.c`: Response-Header-Verarbeitung. 【F:src/ngx_http_modsecurity_header_filter.c†L411-L537】
+- `src/ngx_http_modsecurity_body_filter.c`: Response-Body-Verarbeitung. 【F:src/ngx_http_modsecurity_body_filter.c†L38-L39】【F:src/ngx_http_modsecurity_body_filter.c†L149-L175】
+- `src/ngx_http_modsecurity_log.c`: Log-Callback und Log-Phase. 【F:src/ngx_http_modsecurity_log.c†L27-L36】【F:src/ngx_http_modsecurity_log.c†L39-L74】
+- `src/ngx_http_modsecurity_common.h`: zentrale Strukturen (`ctx`, `main_conf`, `loc_conf`). 【F:src/ngx_http_modsecurity_common.h†L80-L127】
 
 ## 3.4 nginx-Moduldefinition und Integration
-
-**Beleg:** `src/ngx_http_modsecurity_module.c`.
-- Direktiven stehen in `ngx_http_modsecurity_commands[]`.
-- nginx-Modulobjekt ist `ngx_http_modsecurity_module`.
-- In `ngx_http_modsecurity_init()` wird registriert:
-  - Access-Handler: `ngx_http_modsecurity_access_handler`
-  - Log-Handler: `ngx_http_modsecurity_log_handler`
-  - Header-Filter-Init: `ngx_http_modsecurity_header_filter_init()`
-  - Body-Filter-Init: `ngx_http_modsecurity_body_filter_init()`
+- Direktiven sind in `ngx_http_modsecurity_commands[]` registriert. 【F:src/ngx_http_modsecurity_module.c†L483-L533】
+- Modulobjekt: `ngx_http_modsecurity_module` vom Typ `NGX_HTTP_MODULE`. 【F:src/ngx_http_modsecurity_module.c†L551-L564】
+- Hook-Registrierung in `ngx_http_modsecurity_init()`:
+  - Access-Phase-Handler,
+  - Log-Phase-Handler,
+  - Header-Filter,
+  - Body-Filter. 【F:src/ngx_http_modsecurity_module.c†L588-L621】
+- Konfig pro Kontext:
+  - main: create/init,
+  - location: create/merge,
+  - server create/merge ist hier `NULL`. 【F:src/ngx_http_modsecurity_module.c†L536-L548】
 
 ## 3.5 Verbindung zu libmodsecurity
-
-**Beleg:** `src/ngx_http_modsecurity_module.c`, `src/ngx_http_modsecurity_access.c`, `src/ngx_http_modsecurity_header_filter.c`, `src/ngx_http_modsecurity_body_filter.c`, `src/ngx_http_modsecurity_log.c`.
-
-Sichtbare API-Aufrufe:
-- Initialisierung: `msc_init()`, `msc_set_connector_info()`, `msc_set_log_cb()`
-- Transaktion: `msc_new_transaction()` / `msc_new_transaction_with_id()`
-- Request:
-  - `msc_process_connection()`
-  - `msc_process_uri()`
-  - `msc_add_n_request_header()`
-  - `msc_process_request_headers()`
-  - `msc_append_request_body()` / `msc_request_body_from_file()`
-  - `msc_process_request_body()`
-- Response:
-  - `msc_add_n_response_header()`
-  - `msc_process_response_headers()`
-  - `msc_append_response_body()`
-  - `msc_process_response_body()`
-- Entscheidung/Logging:
-  - `msc_intervention()`
-  - `msc_update_status_code()`
-  - `msc_process_logging()`
-
-## 3.6 Request-Verarbeitung
-
-**Beleg:** `ngx_http_modsecurity_access_handler()` in `src/ngx_http_modsecurity_access.c`.
-
-Ablauf (sichtbar im Code):
-1. Location-Config lesen und prüfen, ob `modsecurity` aktiv ist.
-2. Kontext/Transaktion anlegen, falls noch nicht vorhanden.
-3. Verbindungsdaten (Client/Server Addr/Port) an libmodsecurity übergeben.
-4. URI/Methode/HTTP-Version übergeben.
-5. Request-Header iterieren und übergeben.
-6. Request-Header verarbeiten lassen (`msc_process_request_headers`).
-7. Request-Body lesen (asynchron), aus Datei oder Speicherkette an libmodsecurity übergeben.
-8. Request-Body final verarbeiten (`msc_process_request_body`).
-9. Nach mehreren Schritten jeweils Intervention prüfen.
-
-## 3.7 Response-/Interventionsverarbeitung
-
-### Response-Header
-**Beleg:** `ngx_http_modsecurity_header_filter()` in `src/ngx_http_modsecurity_header_filter.c`.
-- Standard-/dynamische Response-Header werden gesammelt und an libmodsecurity übergeben.
-- Danach: `msc_process_response_headers()` und Intervention prüfen.
-
-### Response-Body
-**Beleg:** `ngx_http_modsecurity_body_filter()` in `src/ngx_http_modsecurity_body_filter.c`.
-- Response-Body-Chunks werden übergeben (`msc_append_response_body`).
-- Am Ende: `msc_process_response_body()` und Intervention prüfen.
-
-### Interventionen
-**Beleg:** `ngx_http_modsecurity_process_intervention()` in `src/ngx_http_modsecurity_module.c`.
-- Fragt mit `msc_intervention()` die Entscheidung ab.
-- Falls `intervention.url` gesetzt ist: baut `Location`-Header und gibt Status zurück.
-- Falls nur Status ≠ 200: aktualisiert Status im ModSecurity-Transaktionsobjekt und gibt Status zurück.
-- Optional frühes Logging (`early_log`) möglich.
-
-## 3.8 Logging
-
-**Beleg:** `src/ngx_http_modsecurity_log.c`, `src/ngx_http_modsecurity_module.c`.
-- `ngx_http_modsecurity_log()` schreibt Meldungen via `ngx_log_error(..., NGX_LOG_INFO, ...)`.
-- Dieser Callback wird mit `msc_set_log_cb()` registriert.
-- In der nginx-Log-Phase ruft das Modul `msc_process_logging()` auf.
-- Zusätzlich kann Interventions-Log in nginx-Error-Log geschrieben werden; abschaltbar über `modsecurity_use_error_log`.
-
-## 3.9 Konfigurationsdirektiven
-
-**Beleg:** `ngx_http_modsecurity_commands[]` + README.
-
-Direktiven:
-- `modsecurity on|off`
-- `modsecurity_rules <rule>`
-- `modsecurity_rules_file <path>`
-- `modsecurity_rules_remote <key> <url>`
-- `modsecurity_transaction_id <string/complex value>`
-- `modsecurity_use_error_log on|off`
-
-Konfigurationsverarbeitung:
-- pro Location: `ngx_http_modsecurity_create_conf()`
-- Merge parent/child: `ngx_http_modsecurity_merge_conf()`
-- Regelmengen werden mit `msc_rules_merge()` zusammengeführt.
-
-## 3.10 Build und Einbindung
-
-**Beleg:** `config`, `README.md`, `win32/README.md`.
-- `config` prüft, ob `libmodsecurity` vorhanden ist (Featuretest über `msc_init`).
-- Modulquellen werden als nginx-addon registriert.
-- README zeigt Einbindung per `--add-module` (statisch) oder `--add-dynamic-module --with-compat` (dynamisch).
-- `config` enthält Modulreihenfolge-Logik für Filter.
-- Windows-Doku beschreibt Buildpfad und nennt dort statische Einbindung als praktischen Weg in diesem Setup.
-
-## 3.11 Grenzen des Repos
-
-- **Nicht im Repo enthalten:** interne Rule-Engine von libmodsecurity.
-- **Nicht vollständig im Repo belegbar:** konkrete Security-Wirkung bestimmter Regelsets; genaue Performance-Aussagen.
-- **nginx-Kernverhalten** (volle Phasen-/Filter-Interna) liegt außerhalb dieses Repos.
-
----
-
-# 4. Datei-für-Datei-Überblick
-
-## `README.md`
-- **Rolle:** Projektzweck, Direktiven, Build-Usage.
-- **Warum wichtig:** offizielle Abgrenzung Connector vs. libmodsecurity.
-- **Lernwert:** Wie Nutzer das Modul bauen und konfigurieren.
-
-## `config`
-- **Rolle:** nginx-Build-Integration.
-- **Warum wichtig:** zeigt Abhängigkeiten und Modulreihenfolge.
-- **Lernwert:** Woher `-lmodsecurity` kommt und wie Quellen eingebunden werden.
-
-## `src/ngx_http_modsecurity_module.c`
-- **Rolle:** Modulregistrierung, Direktiven, Main-/Loc-Config, Interventionen.
-- **Warum wichtig:** zentrale Integrationsdatei.
-- **Lernwert:** Wie nginx-API und libmodsecurity-API verbunden werden.
-
-## `src/ngx_http_modsecurity_access.c`
-- **Rolle:** Request-Pipeline.
-- **Warum wichtig:** zeigt, wann welche Request-Daten übergeben werden.
-- **Lernwert:** praktische Reihenfolge: Connection → URI → Header → Body → Intervention.
-
-## `src/ngx_http_modsecurity_header_filter.c`
-- **Rolle:** Response-Header-Pipeline.
-- **Warum wichtig:** Übergabe von Headern und Status an libmodsecurity.
-- **Lernwert:** Response-Hook vor Body-Verarbeitung.
-
-## `src/ngx_http_modsecurity_body_filter.c`
-- **Rolle:** Response-Body-Pipeline.
-- **Warum wichtig:** Chunk-basierte Übergabe und Interventionsprüfung.
-- **Lernwert:** wie Streaming-Daten in die Engine gehen.
-
-## `src/ngx_http_modsecurity_log.c`
-- **Rolle:** Logging-Brücke.
-- **Warum wichtig:** verbindet libmodsecurity-Logs mit nginx-Logsystem.
-- **Lernwert:** wann Logging in der nginx-Log-Phase erfolgt.
-
-## `src/ngx_http_modsecurity_common.h`
-- **Rolle:** gemeinsame Strukturen und Prototypen.
-- **Warum wichtig:** zeigt Kontextflags und Konfigurationszustand.
-- **Lernwert:** internes Zustandsmodell des Connectors.
-
-## `tests/*.t` (z. B. `modsecurity.t`, `modsecurity-config.t`, `modsecurity-transaction-id.t`)
-- **Rolle:** Verhaltenstests im nginx-Testframework.
-- **Warum wichtig:** zeigt erwartetes Laufzeitverhalten (Block/Redirect/Merge/TX-ID).
-- **Lernwert:** welche Integrationsfälle real abgesichert sind.
-
----
-
-# 5. Request-Lebenszyklus
-
-1. nginx empfängt Anfrage.
-2. Access-Handler des Connectors läuft (wenn `modsecurity on`).
-3. Connector erzeugt ModSecurity-Transaction-Kontext.
-4. Connector übergibt Verbindungsdaten (Client/Server).
-5. Connector übergibt URI, Methode, HTTP-Version.
-6. Connector übergibt Request-Header.
-7. Connector lässt Request-Header von libmodsecurity verarbeiten.
-8. Connector liest Request-Body (asynchron), übergibt Datei oder Buffer-Chunks.
-9. Connector lässt Request-Body verarbeiten.
-10. Nach den Schritten prüft Connector immer wieder `msc_intervention`.
-11. Bei Antwort: Header-Filter übergibt Response-Header + Status, prüft Intervention.
-12. Body-Filter übergibt Response-Body-Chunks, verarbeitet final, prüft Intervention.
-13. In Log-Phase wird Logging über libmodsecurity abgeschlossen.
-
----
-
-# 6. Klare Abgrenzung der Verantwortlichkeiten
-
-## nginx
-- HTTP-Serverbetrieb, Eventloop, Netzwerk-I/O.
-- Request-/Response-Lebenszyklus und Phasensteuerung.
-- Filterkette und endgültige Antwortauslieferung.
-
-## ModSecurity-nginx-Connector (dieses Repo)
-- nginx-Hooks registrieren.
-- Daten aus nginx extrahieren und an libmodsecurity weiterreichen.
-- Interventionen in nginx-Status/Redirect umsetzen.
-- Connector-Konfigurationsdirektiven verwalten.
-
-## libmodsecurity
-- Regel-Engine (Parsing, Evaluation, Actions, Anomalie-/Entscheidungslogik).
-- Erzeugung der Interventionen.
-- ModSecurity-seitige Audit-/Debug-Mechanik.
-
-**Wenn Detail intern nicht sichtbar:** im Repository nicht eindeutig belegbar.
-
----
-
-# 7. Belegübersicht
-
-1. **Repo ist Connector, nicht Engine**  
-   - Datei: `README.md`  
-   - Kontext: Einleitungsabsatz  
-   - Beleg: "connection point" zwischen nginx und libmodsecurity.
-
-2. **Modul-Hooks in Access/Log/Header/Body**  
-   - Datei: `src/ngx_http_modsecurity_module.c`  
-   - Funktion: `ngx_http_modsecurity_init`  
-   - Beleg: Handler-/Filter-Registrierung sichtbar.
-
-3. **Direktivenliste**  
-   - Datei: `src/ngx_http_modsecurity_module.c`  
-   - Struktur: `ngx_http_modsecurity_commands[]`  
-   - Beleg: `modsecurity*`, `transaction_id`, `use_error_log`.
-
-4. **Request-Datenübergabe**  
-   - Datei: `src/ngx_http_modsecurity_access.c`  
-   - Funktion: `ngx_http_modsecurity_access_handler`  
-   - Beleg: `msc_process_connection`, `msc_process_uri`, Header-/Body-Aufrufe.
-
-5. **Response-Datenübergabe**  
-   - Dateien: `src/ngx_http_modsecurity_header_filter.c`, `src/ngx_http_modsecurity_body_filter.c`  
-   - Funktionen: `ngx_http_modsecurity_header_filter`, `ngx_http_modsecurity_body_filter`  
-   - Beleg: `msc_process_response_headers`, `msc_process_response_body`.
-
-6. **Intervention-Umsetzung**  
-   - Datei: `src/ngx_http_modsecurity_module.c`  
-   - Funktion: `ngx_http_modsecurity_process_intervention`  
-   - Beleg: Redirect/Statuscode/Logging-Pfade.
-
-7. **Buildabhängigkeit libmodsecurity**  
-   - Datei: `config`  
-   - Kontext: Featuretest und Fehlerfall  
-   - Beleg: `-lmodsecurity`, Abbruch bei fehlender Lib.
-
-8. **Tests existieren und decken Integrationsfälle ab**  
-   - Dateien: `tests/modsecurity.t`, `tests/modsecurity-config.t`, `tests/modsecurity-transaction-id.t`  
-   - Kontext: Perl-Testfälle  
-   - Beleg: Redirect/Block/Merge/Transaction-ID-Prüfungen.
-
----
-
-# 8. Unsicherheiten / nicht eindeutig belegbare Punkte
-
-- Interne Engine-Details von libmodsecurity (Regelparser, Matching-Interna) sind **nicht im Connector-Repo enthalten**.
-- Konkrete Security-Wirkung eines beliebigen Regelsets ist **aus diesem Repo allein nicht sicher ableitbar**.
-- Allgemeingültige Performance-Aussagen sind **nicht eindeutig belegbar**.
-- Vollständige nginx-Kern-Details (außerhalb der aufgerufenen APIs) sind **nicht Teil dieses Repos**.
-
----
-
-# 9. TL;DR für Backend-Entwickler
-
-- C-basiertes nginx-Modul als Connector zu libmodsecurity.
-- Nicht die eigentliche WAF-Engine.
-- Registriert Access-/Log-Handler plus Header-/Body-Filter.
-- Übergibt Request und Response schrittweise an libmodsecurity.
-- Prüft nach Verarbeitungspunkten auf Interventionen.
-- Setzt Interventionsresultate als nginx-Status/Redirect um.
-- Konfigurierbar über `modsecurity*`, `modsecurity_transaction_id`, `modsecurity_use_error_log`.
-- Buildintegration via `config`, harte Abhängigkeit auf libmodsecurity.
-- Tests zeigen Integrationsverhalten (Block, Redirect, Merge, TX-ID).
-- Grenzen: Engine-Interna liegen in libmodsecurity, nicht hier.
-
----
-
-# 10. Wie ich dieses Repo einem Junior-Entwickler in 2 Minuten erklären würde
-
-Das hier ist ein Adaptermodul für nginx. Es macht aus nginx keinen eigenen WAF-Kern, sondern verbindet nginx mit libmodsecurity. Der Connector hängt sich in mehrere nginx-Stellen ein: beim Request-Zugriff, beim Response-Header, beim Response-Body und beim Logging. Er nimmt die Daten, die nginx ohnehin hat (z. B. URI, Header, Body), und ruft damit die libmodsecurity-Funktionen auf. Danach fragt er, ob libmodsecurity eingreifen will. Wenn ja, setzt er den von der Engine gelieferten Effekt in nginx um (z. B. HTTP-Status oder Redirect). Wenn nein, geht der Request normal weiter. Für neue Entwickler ist wichtig: Dieses Repo erklärt das Integrationsverhalten sehr gut, aber nicht die innere Regel-Engine. Für echte Regel-/Securitylogik musst du parallel in libmodsecurity schauen.
-
----
-
-# 11. Welche 5 Dateien ich als Erstes lesen würde und warum
-
-1. **`src/ngx_http_modsecurity_module.c`**  
-   Zentrale Einstiegspunkte: Direktiven, Modulregistrierung, Konfig-Merge, Intervention.
-
-2. **`src/ngx_http_modsecurity_access.c`**  
-   Klarster Request-Datenfluss Richtung libmodsecurity.
-
-3. **`src/ngx_http_modsecurity_header_filter.c`**  
-   Zeigt Response-Header-Integration und Statusverarbeitung.
-
-4. **`src/ngx_http_modsecurity_body_filter.c`**  
-   Zeigt Response-Body-Übergabe in Chunk-Form.
-
-5. **`config`**  
-   Zeigt Build-/Link-Integration in nginx inkl. Abhängigkeiten und Modulreihenfolge.
+- Initialisierung: `msc_init()`, Connector-Info, Log-Callback. 【F:src/ngx_http_modsecurity_module.c†L662-L672】
+- Transaktion pro Request: `msc_new_transaction*`. 【F:src/ngx_http_modsecurity_module.c†L291-L299】
+- Request-Übergaben: `msc_process_connection`, `msc_process_uri`, `msc_add_n_request_header`, `msc_process_request_headers`, `msc_append_request_body`, `msc_request_body_from_file`, `msc_process_request_body`. 【F:src/ngx_http_modsecurity_access.c†L162-L166】【F:src/ngx_http_modsecurity_access.c†L225-L226】【F:src/ngx_http_modsecurity_access.c†L262-L276】【F:src/ngx_http_modsecurity_access.c†L406-L419】【F:src/ngx_http_modsecurity_access.c†L447-L449】
+- Response-Übergaben: `msc_add_n_response_header`, `msc_process_response_headers`, `msc_append_response_body`, `msc_process_response_body`. 【F:src/ngx_http_modsecurity_header_filter.c†L503-L531】【F:src/ngx_http_modsecurity_body_filter.c†L149-L164】
+- Intervention/Logging: `msc_intervention`, `msc_update_status_code`, `msc_process_logging`. 【F:src/ngx_http_modsecurity_module.c†L159-L162】【F:src/ngx_http_modsecurity_module.c†L231-L236】【F:src/ngx_http_modsecurity_log.c†L69-L72】
+
+## 3.6 Datenmodell und Datenübergabe
+### Grundmodell
+- Sichtbar ist ein **API-basiertes Feldmodell** (viele einzelne Funktionsaufrufe).
+- Sichtbar sind C-Zeiger, Bytepointer, Längenangaben, nginx-`ngx_str_t`/Listen/Ketten.
+- Es gibt im Connector keinen sichtbar implementierten „einheitlichen Nachrichtencontainer“ (z. B. ein JSON-Objekt mit allen Feldern). 【F:src/ngx_http_modsecurity_common.h†L80-L127】【F:src/ngx_http_modsecurity_access.c†L262-L267】【F:src/ngx_http_modsecurity_body_filter.c†L149-L150】
+
+### JSON-Prüfung
+- Suche im Connector-Code zeigt keine JSON-Bau-/Parse-Logik; Treffer zu `yajl` stehen im Build-Skript als Link-Option, nicht als Datenpfad im Connector-Code. 【F:config†L8-L23】
+- Daher: **Im Connector-Code kein JSON-Datenübergabepfad eindeutig belegt**.
+
+### Datenform im Detail (Kurz)
+- `ngx_str_t` wird teils in nullterminierte C-Strings kopiert (`ngx_str_to_char`) für API-Aufrufe. 【F:src/ngx_http_modsecurity_module.c†L114-L136】
+- Header werden als Name/Wert + Länge pro Header übergeben (`msc_add_n_request_header`, `msc_add_n_response_header`). 【F:src/ngx_http_modsecurity_access.c†L262-L267】【F:src/ngx_http_modsecurity_header_filter.c†L503-L507】
+- Body wird als Bytes aus Buffer-Ketten übergeben oder per Dateipfad. 【F:src/ngx_http_modsecurity_access.c†L394-L419】【F:src/ngx_http_modsecurity_access.c†L406-L407】
+- URI/Methode/Version werden separat in `msc_process_uri` übergeben. 【F:src/ngx_http_modsecurity_access.c†L215-L226】
+- Status/Redirect kommen aus `ModSecurityIntervention`-Struct zurück. 【F:src/ngx_http_modsecurity_module.c†L143-L147】【F:src/ngx_http_modsecurity_module.c†L182-L221】
+
+## 3.7 Request-Verarbeitung
+- Access-Handler prüft `modsecurity on`. 【F:src/ngx_http_modsecurity_access.c†L53-L57】
+- Kontext erzeugen, Transaction initialisieren. 【F:src/ngx_http_modsecurity_access.c†L85-L92】【F:src/ngx_http_modsecurity_module.c†L279-L299】
+- Connectiondaten übergeben. 【F:src/ngx_http_modsecurity_access.c†L162-L166】
+- URI/Methode/Version übergeben. 【F:src/ngx_http_modsecurity_access.c†L215-L226】
+- Request-Header iterieren und paarweise übergeben. 【F:src/ngx_http_modsecurity_access.c†L239-L267】
+- Header verarbeiten + Intervention prüfen. 【F:src/ngx_http_modsecurity_access.c†L274-L285】
+- Body asynchron lesen; bei `NGX_AGAIN` warten. 【F:src/ngx_http_modsecurity_access.c†L355-L371】
+- Body aus Datei oder Bufferketten übergeben, final verarbeiten, Intervention prüfen. 【F:src/ngx_http_modsecurity_access.c†L394-L458】
+
+## 3.8 Response-/Interventionsverarbeitung
+- Header-Filter sammelt/überträgt Header, verarbeitet Response-Header in libmodsecurity, prüft Intervention. 【F:src/ngx_http_modsecurity_header_filter.c†L472-L537】
+- Body-Filter überträgt Body-Bytes je Chain-Element, verarbeitet finalen Response-Body, prüft Intervention. 【F:src/ngx_http_modsecurity_body_filter.c†L143-L175】
+- Intervention-Funktion reagiert auf `status`, `url`, `log`, setzt ggf. `Location`-Header und liefert nginx-Status zurück. 【F:src/ngx_http_modsecurity_module.c†L143-L147】【F:src/ngx_http_modsecurity_module.c†L182-L221】【F:src/ngx_http_modsecurity_module.c†L223-L246】
+
+## 3.9 Logging
+- libmodsecurity-Logcallback schreibt in nginx-Logging (`ngx_log_error`, INFO). 【F:src/ngx_http_modsecurity_log.c†L27-L36】
+- Registrierung des Callbacks bei Init. 【F:src/ngx_http_modsecurity_module.c†L671-L672】
+- Log-Phase ruft `msc_process_logging`. 【F:src/ngx_http_modsecurity_log.c†L69-L72】
+- Interventionslogs optional ins nginx-Error-Log, steuerbar über Direktive. 【F:src/ngx_http_modsecurity_module.c†L169-L176】【F:src/ngx_http_modsecurity_module.c†L525-L530】
+
+## 3.10 Konfigurationsdirektiven
+- Registrierte Direktiven: `modsecurity`, `modsecurity_rules`, `modsecurity_rules_file`, `modsecurity_rules_remote`, `modsecurity_transaction_id`, `modsecurity_use_error_log`. 【F:src/ngx_http_modsecurity_module.c†L483-L533】
+- Regeln laden via `msc_rules_add*`; Merge via `msc_rules_merge`. 【F:src/ngx_http_modsecurity_module.c†L364-L410】【F:src/ngx_http_modsecurity_module.c†L437-L449】【F:src/ngx_http_modsecurity_module.c†L777-L787】
+
+## 3.11 Build und Einbindung
+- README zeigt `--add-module` und `--add-dynamic-module`. 【F:README.md†L29-L37】
+- `config` prüft libmodsecurity-Feature und bricht bei Fehlen ab. 【F:config†L11-L17】【F:config†L82-L87】
+- `config` listet Modulquellen/-deps und Filter-Order-Logik. 【F:config†L119-L137】【F:config†L164-L197】
+
+## 3.12 Grenzen des Repos
+- Interne Rule-Evaluation-Logik ist nicht im Connector, sondern in libmodsecurity. 【F:README.md†L8-L13】【F:src/ngx_http_modsecurity_common.h†L25-L27】
+- Vollständige nginx-Kerninterna (außer aufgerufene APIs) sind außerhalb dieses Repos.
+- Aussage zu Performance/Sicherheitswirkung konkreter Regeln: aus dem vorliegenden Connector-Code nicht sicher ableitbar.
+
+# 4. Datenfluss-Tabelle
+| Datenart | Quelle in nginx | Interne Repräsentation im Connector | Weitergabe an libmodsecurity | Sichtbares Format | Beleg |
+|---|---|---|---|---|---|
+| Methode | `r->method_name` | `ngx_str_t` → ggf. C-String via `ngx_str_to_char` | `msc_process_uri(..., method, ...)` | Feldweise API, String | `src/ngx_http_modsecurity_access.c` `ngx_http_modsecurity_access_handler`【F:src/ngx_http_modsecurity_access.c†L216-L226】 |
+| URI | `r->unparsed_uri` | `ngx_str_t` → C-String | `msc_process_uri(uri, method, version)` | Feldweise API, String | gleiche Stelle【F:src/ngx_http_modsecurity_access.c†L215-L226】 |
+| Query String | nicht separat sichtbar übergeben; Query evtl. Teil von `unparsed_uri` | keine separate Connector-Struktur sichtbar | kein separater API-Call im Connector sichtbar | aus Code: kein eigenes Austauschobjekt | kein eigener Übergabecall gefunden; nur `unparsed_uri`-Pfad【F:src/ngx_http_modsecurity_access.c†L215-L226】 |
+| HTTP-Version | `r->http_version` / `r->http_protocol` | Switch auf C-String (`"1.1"`, etc. oder aus Protokollstring) | `msc_process_uri(..., http_version)` | Feldweise API, String | `src/ngx_http_modsecurity_access.c`【F:src/ngx_http_modsecurity_access.c†L186-L213】【F:src/ngx_http_modsecurity_access.c†L225-L226】 |
+| Request-Header | `r->headers_in.headers` (ngx list) | Iteration über `ngx_list_part_t`/`ngx_table_elt_t` | pro Header `msc_add_n_request_header(name,len,val,len)` | Key/Value + Länge je Header | `src/ngx_http_modsecurity_access.c`【F:src/ngx_http_modsecurity_access.c†L239-L267】 |
+| Request-Body | `r->request_body->bufs` oder `temp_file` | `ngx_chain_t`-Buffers / Dateipfad (`ngx_str_t`) | `msc_append_request_body(bytes,len)` oder `msc_request_body_from_file(path)` + `msc_process_request_body()` | Byte-Chunk oder Dateipfad, kein JSON | `src/ngx_http_modsecurity_access.c`【F:src/ngx_http_modsecurity_access.c†L394-L419】【F:src/ngx_http_modsecurity_access.c†L406-L407】【F:src/ngx_http_modsecurity_access.c†L447-L449】 |
+| Response-Header | `r->headers_out` + `r->headers_out.headers` | Resolver + List-Iteration | pro Header `msc_add_n_response_header(name,len,val,len)` + `msc_process_response_headers(status,version)` | Key/Value + Länge je Header | `src/ngx_http_modsecurity_header_filter.c`【F:src/ngx_http_modsecurity_header_filter.c†L472-L531】 |
+| Response-Body | Body-Filter-Chain `ngx_chain_t *in` | `chain->buf->pos/last` Bytes | `msc_append_response_body(bytes,len)` + am Ende `msc_process_response_body()` | Byte-Chunk | `src/ngx_http_modsecurity_body_filter.c`【F:src/ngx_http_modsecurity_body_filter.c†L143-L164】 |
+| Client-IP / Connection-Infos | `connection->addr_text`, `sockaddr`, `local_sockaddr` | `ngx_str_t`/Ports → C-String + ints | `msc_process_connection(client_addr,client_port,server_addr,server_port)` | Feldweise API | `src/ngx_http_modsecurity_access.c`【F:src/ngx_http_modsecurity_access.c†L78-L105】【F:src/ngx_http_modsecurity_access.c†L162-L166】 |
+| Intervention-Ergebnis | `ModSecurityIntervention intervention` | C-Struct Felder: `status`, `url`, `log`, `disruptive` | `msc_intervention(...)`; Ergebnis wird in nginx-Status/Headers umgesetzt | Struct-basiert, kein JSON | `src/ngx_http_modsecurity_module.c` `ngx_http_modsecurity_process_intervention`【F:src/ngx_http_modsecurity_module.c†L143-L147】【F:src/ngx_http_modsecurity_module.c†L159-L162】【F:src/ngx_http_modsecurity_module.c†L182-L246】 |
+
+# 5. Datei-für-Datei-Überblick
+- `README.md`
+  - Rolle: Zweck, Direktiven, Build-Hinweise.
+  - Warum wichtig: beschreibt offiziell die Connector-Rolle.
+  - Man lernt: Abgrenzung zu libmodsecurity + Nutzungsdirektiven.
+  - Auffällig: Direktiven-Dokumentation und Build-Optionen. 【F:README.md†L8-L13】【F:README.md†L29-L37】【F:README.md†L47-L187】
+
+- `config`
+  - Rolle: nginx-Buildintegration.
+  - Warum wichtig: echte Modulaufnahme und Linkabhängigkeiten.
+  - Man lernt: Abhängigkeitsprüfung, Quellenliste, Modulorder.
+  - Auffällig: `-lmodsecurity`, dynamic/static branches. 【F:config†L11-L17】【F:config†L116-L161】
+
+- `src/ngx_http_modsecurity_module.c`
+  - Rolle: Modulgerüst.
+  - Warum wichtig: zentrale Integration und Intervention.
+  - Man lernt: Hooks, Direktiven, Config-Lifecycle.
+  - Auffällig: `ngx_http_modsecurity_process_intervention`, `ngx_http_modsecurity_init`. 【F:src/ngx_http_modsecurity_module.c†L140-L247】【F:src/ngx_http_modsecurity_module.c†L567-L624】
+
+- `src/ngx_http_modsecurity_access.c`
+  - Rolle: Request-Pipeline.
+  - Warum wichtig: zeigt Datenerfassung/-übergabe am klarsten.
+  - Man lernt: Feldweise API-Aufrufe (Connection, URI, Header, Body).
+  - Auffällig: Body-Handhabung via Datei/Buffer/Chunks. 【F:src/ngx_http_modsecurity_access.c†L162-L166】【F:src/ngx_http_modsecurity_access.c†L215-L226】【F:src/ngx_http_modsecurity_access.c†L394-L419】
+
+- `src/ngx_http_modsecurity_header_filter.c`
+  - Rolle: Response-Header-Hook.
+  - Warum wichtig: zeigt Header-Übergabeformat und Statusverarbeitung.
+  - Man lernt: pro-Header-Calls + `msc_process_response_headers`.
+  - Auffällig: eigene Resolverliste für wichtige Header. 【F:src/ngx_http_modsecurity_header_filter.c†L36-L69】【F:src/ngx_http_modsecurity_header_filter.c†L472-L531】
+
+- `src/ngx_http_modsecurity_body_filter.c`
+  - Rolle: Response-Body-Hook.
+  - Warum wichtig: chunk-weise Weitergabe sichtbar.
+  - Man lernt: stream-artige Übergabe über `ngx_chain_t`.
+  - Auffällig: finale Verarbeitung bei `last_buf`. 【F:src/ngx_http_modsecurity_body_filter.c†L143-L164】【F:src/ngx_http_modsecurity_body_filter.c†L157-L160】
+
+- `src/ngx_http_modsecurity_log.c`
+  - Rolle: Logging-Brücke.
+  - Warum wichtig: zeigt Einsatz von nginx-Logging + ModSecurity-Loggingphase.
+  - Man lernt: Log-Callback und `msc_process_logging()`. 【F:src/ngx_http_modsecurity_log.c†L27-L36】【F:src/ngx_http_modsecurity_log.c†L69-L72】
+
+- `src/ngx_http_modsecurity_common.h`
+  - Rolle: zentrale Typen und Zustandsflags.
+  - Warum wichtig: zeigt, wie Connector intern Zustand hält.
+  - Man lernt: `ctx`-Flags (`waiting_more_body`, `processed`, etc.) und conf-Strukturen. 【F:src/ngx_http_modsecurity_common.h†L97-L127】
+
+# 6. Request-Lebenszyklus
+1. **Access-Phase-Einstieg**: Modul wird über nginx-Phase aufgerufen. (Form: nginx Request-Struct `ngx_http_request_t *r`). 【F:src/ngx_http_modsecurity_module.c†L588-L595】
+2. **Enable-Prüfung**: `mcf->enable` in Location-Config. (Form: ngx conf struct). 【F:src/ngx_http_modsecurity_access.c†L53-L57】
+3. **Context/Transaction**: ggf. neue `Transaction*` erzeugen. (Form: C-Struct/Pointer). 【F:src/ngx_http_modsecurity_module.c†L279-L299】
+4. **Connectiondaten**: Client-/Server-Adresse + Ports aus nginx-Connection; Übergabe per Einzelaufruf `msc_process_connection`. (Form: C-Strings + ints). 【F:src/ngx_http_modsecurity_access.c†L78-L105】【F:src/ngx_http_modsecurity_access.c†L162-L166】
+5. **Request-Line-Daten**: URI/Methode/Version getrennt an `msc_process_uri`. (Form: C-Strings). 【F:src/ngx_http_modsecurity_access.c†L186-L226】
+6. **Request-Header**: Iteration über nginx-Headerliste; pro Header Key/Value+Len an API. (Form: Key/Value-paarweise, nicht Gesamtblock). 【F:src/ngx_http_modsecurity_access.c†L239-L267】
+7. **Request-Body-Lesen**: asynchron via `ngx_http_read_client_request_body`; bei `NGX_AGAIN` warten. (Form: event/getriebener Bufferfluss). 【F:src/ngx_http_modsecurity_access.c†L355-L371】
+8. **Request-Body-Übergabe**:
+   - wenn temp-file: Dateipfad an API,
+   - sonst: Buffers chunk-weise (`pos..last`) an API.
+   (Form: Dateipfad oder Byte-Streams). 【F:src/ngx_http_modsecurity_access.c†L394-L419】【F:src/ngx_http_modsecurity_access.c†L406-L407】
+9. **Intervention-Prüfungen**: mehrfach nach Zwischenstufen über `msc_intervention`. (Form: Struct-Rückgabe). 【F:src/ngx_http_modsecurity_access.c†L179-L184】【F:src/ngx_http_modsecurity_access.c†L228-L233】【F:src/ngx_http_modsecurity_access.c†L452-L458】
+10. **Response-Header-Hook**: Header einzeln + Status/HTTP-Version an libmodsecurity. 【F:src/ngx_http_modsecurity_header_filter.c†L503-L531】
+11. **Response-Body-Hook**: Byte-Chunks an libmodsecurity, finale Body-Verarbeitung bei `last_buf`. 【F:src/ngx_http_modsecurity_body_filter.c†L149-L164】
+12. **Log-Phase**: `msc_process_logging` auf Transaction. 【F:src/ngx_http_modsecurity_log.c†L69-L72】
+
+# 7. Klare Abgrenzung der Verantwortlichkeiten
+| Bereich | Verantwortung (aus Code/Repo) | Nicht sicher aus Repo ableitbar |
+|---|---|---|
+| nginx | Netzwerk/HTTP-Lifecycle/Phasen/Filterkette; stellt `ngx_http_request_t`/Headerlisten/Bufferketten bereit. | Interne nginx-Detailabläufe jenseits der aufgerufenen APIs. |
+| ModSecurity-nginx-Connector | Hook-Registrierung, Config-Direktiven, Extraktion von nginx-Daten, API-Aufrufe zu libmodsecurity, Intervention in nginx umsetzen. 【F:src/ngx_http_modsecurity_module.c†L483-L624】【F:src/ngx_http_modsecurity_access.c†L46-L464】 | Vollständige Security-Entscheidungslogik. |
+| libmodsecurity | Rule-Engine, Intervention-Entscheidung, Logging-/Audit-Verarbeitung (über APIs aufgerufen). 【F:src/ngx_http_modsecurity_common.h†L25-L27】【F:src/ngx_http_modsecurity_module.c†L159-L162】 | Interne Algorithmen/Regelverarbeitung im Detail (im Connector-Repo nicht vorhanden). |
+
+# 8. Belegübersicht
+- Aussage: Repo ist Connector zwischen nginx und libmodsecurity.  
+  Datei/Funktion: `README.md` Einleitung.  
+  Beleg: explizite Projektbeschreibung als „connection point“. 【F:README.md†L8-L13】
+
+- Aussage: Modul nutzt Access-, Log-, Header- und Body-Hooks.  
+  Datei/Funktion: `src/ngx_http_modsecurity_module.c`, `ngx_http_modsecurity_init`.  
+  Beleg: Registrierung in Phasen + Filter-Init. 【F:src/ngx_http_modsecurity_module.c†L588-L621】
+
+- Aussage: Direktiven werden im Modul registriert.  
+  Datei/Struktur: `src/ngx_http_modsecurity_module.c`, `ngx_http_modsecurity_commands[]`.  
+  Beleg: alle `modsecurity*`-Einträge sichtbar. 【F:src/ngx_http_modsecurity_module.c†L483-L533】
+
+- Aussage: Request-Header werden paarweise übergeben.  
+  Datei/Funktion: `src/ngx_http_modsecurity_access.c`, `ngx_http_modsecurity_access_handler`.  
+  Beleg: Loop + `msc_add_n_request_header(name,len,val,len)`. 【F:src/ngx_http_modsecurity_access.c†L239-L267】
+
+- Aussage: Request-Body wird Datei-basiert oder chunk-weise übertragen.  
+  Datei/Funktion: `src/ngx_http_modsecurity_access.c`, `ngx_http_modsecurity_access_handler`.  
+  Beleg: `msc_request_body_from_file` bzw. `msc_append_request_body`. 【F:src/ngx_http_modsecurity_access.c†L394-L419】【F:src/ngx_http_modsecurity_access.c†L406-L407】
+
+- Aussage: Response-Header/-Body ebenfalls API-basiert feldweise/chunkweise.  
+  Dateien/Funktionen: `src/ngx_http_modsecurity_header_filter.c` / `src/ngx_http_modsecurity_body_filter.c`.  
+  Beleg: `msc_add_n_response_header`, `msc_append_response_body`. 【F:src/ngx_http_modsecurity_header_filter.c†L503-L507】【F:src/ngx_http_modsecurity_body_filter.c†L149-L150】
+
+- Aussage: Intervention wird aus Struct gelesen und in nginx umgesetzt (Status/Redirect).  
+  Datei/Funktion: `src/ngx_http_modsecurity_module.c`, `ngx_http_modsecurity_process_intervention`.  
+  Beleg: `ModSecurityIntervention`-Felder und Location-Header-Setzung. 【F:src/ngx_http_modsecurity_module.c†L143-L147】【F:src/ngx_http_modsecurity_module.c†L182-L221】
+
+- Aussage: Kein JSON-Fluss im Connector belegt.  
+  Datei/Kontext: Code-Sichtung; `config` erwähnt YAJL nur Build-Linking.  
+  Beleg: keine JSON-API im Connector, YAJL-Hinweise nur im Buildskript. 【F:config†L8-L23】
+
+# 9. Unsicherheiten / nicht eindeutig belegbare Punkte
+- Ob libmodsecurity intern JSON nutzt, ist aus diesem Connector-Repo **nicht eindeutig belegbar**.
+- Exakte Semantik von `r->unparsed_uri` bzgl. Query ist ohne nginx-Quell-/Dokuvergleich **aus dem vorliegenden Connector-Code nicht sicher ableitbar**; separat übergeben wird Query hier jedenfalls nicht.
+- Konkrete Securitywirkung bestimmter Regelsets ist **im Connector-Repo nicht eindeutig belegbar** (Enginelogik extern).
+- Performanceaussagen (schneller/langsamer) sind aus den hier sichtbaren Dateien **nicht sicher ableitbar**.
+
+# 10. TL;DR für Backend-Entwickler
+- Connector-Modul in C, nicht die WAF-Engine.
+- Hängt sich in Access/Log und Header-/Body-Filter ein.
+- Übergibt Daten an libmodsecurity über viele einzelne C-API-Aufrufe.
+- Methode/URI/Version werden separat übergeben.
+- Header werden pro Header als Name/Wert+Länge übergeben.
+- Body wird als Byte-Chunks oder per Dateipfad übergeben.
+- Intervention kommt als C-Struct zurück und wird in nginx-Status/Redirect übersetzt.
+- Buildintegration über `config`, Abhängigkeit auf `-lmodsecurity`.
+- **JSON oder nicht?** Im Connector-Code ist kein JSON-Übergabepfad belegt.
+- Kein einheitliches Serialisierungsobjekt sichtbar; stattdessen feldweise API-Übergabe.
+
+# 11. Wie ich dieses Repo einem Junior-Entwickler in 2 Minuten erklären würde
+Das Repo ist ein Übersetzer zwischen nginx und libmodsecurity. nginx liefert Request/Response-Daten in seinen eigenen Strukturen. Der Connector liest diese Felder, wandelt manche `ngx_str_t` in C-Strings um und ruft damit die libmodsecurity-APIs auf. Das passiert nicht als ein großes JSON-Paket, sondern in vielen einzelnen Schritten: Connection-Daten, URI/Methode/Version, Header für Header, Body chunk-weise oder aus Datei. Danach fragt der Connector die Engine nach einer Intervention. Wenn es eine gibt, setzt der Connector in nginx den passenden Effekt (z. B. Statuscode oder Redirect-Location). Die Regel- und Entscheidungslogik selbst liegt in libmodsecurity, nicht in diesem Repo. Für den Einstieg sind Moduldatei, Access-Handler und Filterdateien am wichtigsten, weil dort der komplette Datenfluss sichtbar ist.
+
+# 12. Welche 5 Dateien ich als Erstes lesen würde und warum
+1. `src/ngx_http_modsecurity_module.c` – bester Gesamteinstieg (Direktiven, Hooks, Intervention, Config-Lifecycle). 【F:src/ngx_http_modsecurity_module.c†L483-L624】
+2. `src/ngx_http_modsecurity_access.c` – klarster Request-Datenfluss inkl. Datentypen/API-Aufrufe. 【F:src/ngx_http_modsecurity_access.c†L162-L267】【F:src/ngx_http_modsecurity_access.c†L394-L458】
+3. `src/ngx_http_modsecurity_header_filter.c` – Response-Header-Datenfluss. 【F:src/ngx_http_modsecurity_header_filter.c†L472-L537】
+4. `src/ngx_http_modsecurity_body_filter.c` – Response-Body-Chunkfluss. 【F:src/ngx_http_modsecurity_body_filter.c†L143-L175】
+5. `config` – Build-/Link-Integration und Modulreihenfolge. 【F:config†L90-L161】【F:config†L164-L197】
+
+## Direkte Antwort auf die Format-Frage
+- **Wird JSON verwendet?** Im sichtbaren Connector-Code: **nicht belegt**; kein JSON-Bau/Parse-Pfad erkennbar.
+- **Was stattdessen?** Feldweise, pointer-/längenbasierte C-API-Aufrufe (`msc_process_uri`, `msc_add_n_*_header`, `msc_append_*_body`, `msc_process_*`).
+- **Gesammelt serialisiert oder feldweise/API-basiert?** Sichtbar ist **feldweise/API-basiert**, nicht ein einzelnes serialisiertes Austauschobjekt.
+- **Sicher belegt / nicht belegt:** Belegt sind die Einzelaufrufe und Datentypen im Connector; nicht belegt sind mögliche interne Formate innerhalb von libmodsecurity.
