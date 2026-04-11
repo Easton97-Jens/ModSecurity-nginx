@@ -16,6 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04]
         compiler: [gcc, clang]
+        nginx_ref: [release-1.29.8]
     env:
         CC: "/usr/bin/${{ matrix.compiler }}"
         CXX: "/usr/bin/${{ matrix.compiler == 'gcc' && 'g' || 'clang' }}++"
@@ -25,7 +26,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -y -qq
-          sudo apt-get install -y make autoconf automake make libyajl-dev libxml2-dev libmaxminddb-dev libcurl4-gnutls-dev $COMPDEPS
+          sudo apt-get install -y make autoconf automake make libyajl-dev libxml2-dev libmaxminddb-dev libcurl4-gnutls-dev libpcre3-dev $COMPDEPS
       - name: Get libModSecurity source
         uses: actions/checkout@v4
         with:
@@ -48,6 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nginx/nginx
+          ref: ${{ matrix.nginx_ref }}
           path: nginx
           fetch-depth: 1
       - name: Get Nginx tests
@@ -253,6 +255,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nginx/nginx
+          ref: release-1.29.8
           path: nginx
           fetch-depth: 1
       - name: Get Nginx tests

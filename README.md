@@ -221,7 +221,7 @@ You may also take a look at recent bug reports and open issues to get an idea of
 Along with the manual testing, we strongly recommend that you to use the nginx test
 utility to make sure that you patch does not adversely affect the behavior or performance of nginx. 
 
-The nginx tests are available on: http://hg.nginx.org/nginx-tests/ 
+The nginx tests are available on: https://github.com/nginx/nginx-tests
 
 To use those tests, make sure you have the Perl utility prove (part of Perl 5)
 and proceed with the following commands:
