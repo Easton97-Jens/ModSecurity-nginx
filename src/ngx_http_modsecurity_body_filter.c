@@ -23,6 +23,10 @@
 #include "ngx_http_modsecurity_common.h"
 
 static ngx_http_output_body_filter_pt ngx_http_next_body_filter;
+static ngx_int_t ngx_http_modsecurity_phase4_in_scope(ngx_http_request_t *r);
+static ngx_int_t ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurity_conf_t *mcf, const char *wanted, const char *actual, const char *reason);
+static void ngx_http_modsecurity_json_escape(ngx_pool_t *pool, ngx_str_t *src, ngx_str_t *dst);
+static void ngx_http_modsecurity_extract_rule_id(ngx_pool_t *pool, ngx_str_t *intervention, ngx_str_t *rule_id);
 
 /* XXX: check behaviour on few body filters installed */
 ngx_int_t
@@ -141,6 +145,7 @@ ngx_http_modsecurity_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 #endif
 
     int is_request_processed = 0;
+    ngx_http_modsecurity_conf_t *mcf = ngx_http_get_module_loc_conf(r, ngx_http_modsecurity_module);
     for (; chain != NULL; chain = chain->next)
     {
         u_char *data = chain->buf->pos;
@@ -151,6 +156,26 @@ ngx_http_modsecurity_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
         if (ret > 0) {
             return ngx_http_filter_finalize_request(r,
                 &ngx_http_modsecurity_module, ret);
+        } else if (ret < 0) {
+            if (ctx->phase4_headers_checked) {
+                return ngx_http_next_body_filter(r, in);
+            }
+            ctx->phase4_headers_checked = 1;
+            if (ngx_http_modsecurity_phase4_in_scope(r) == 0 || mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_MINIMAL) {
+                ngx_http_modsecurity_phase4_log_event(r, mcf, "deny_status", "log_only", ngx_http_modsecurity_phase4_in_scope(r) ? "mode_minimal" : "content_type_not_in_scope");
+                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                    "modsecurity phase4 intervention after headers sent, action=log_only, uri=\"%V\"", &r->uri);
+            } else if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_STRICT) {
+                ngx_http_modsecurity_phase4_log_event(r, mcf, "deny_status", "connection_abort", "headers_already_sent");
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "modsecurity phase4 intervention after headers sent, action=connection_abort, uri=\"%V\"", &r->uri);
+                r->connection->error = 1;
+                return NGX_ERROR;
+            } else {
+                ngx_http_modsecurity_phase4_log_event(r, mcf, "deny_status", "log_only", "mode_safe");
+                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                    "modsecurity phase4 intervention after headers sent, action=log_only, uri=\"%V\"", &r->uri);
+            }
         }
 
 /* XXX: chain->buf->last_buf || chain->buf->last_in_chain */
@@ -170,8 +195,11 @@ ngx_http_modsecurity_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
                 return ret;
             }
             else if (ret < 0) {
-                return ngx_http_filter_finalize_request(r,
-                    &ngx_http_modsecurity_module, NGX_HTTP_INTERNAL_SERVER_ERROR);
+                if (ngx_http_modsecurity_phase4_in_scope(r) == 0 || mcf->phase4_mode != NGX_HTTP_MODSEC_PHASE4_MODE_STRICT) {
+                    return ngx_http_next_body_filter(r, in);
+                }
+                r->connection->error = 1;
+                return NGX_ERROR;
 
             }
         }
@@ -183,4 +211,85 @@ ngx_http_modsecurity_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
 /* XXX: xflt_filter() -- return NGX_OK here */
     return ngx_http_next_body_filter(r, in);
+}
+
+static ngx_int_t
+ngx_http_modsecurity_phase4_in_scope(ngx_http_request_t *r)
+{
+    ngx_http_modsecurity_conf_t *mcf = ngx_http_get_module_loc_conf(r, ngx_http_modsecurity_module);
+    ngx_uint_t i;
+    ngx_str_t ct;
+    u_char *semi;
+    if (r->headers_out.content_type.len == 0 || mcf->phase4_content_types == NULL) return 0;
+    ct = r->headers_out.content_type;
+    semi = (u_char *)ngx_strlchr(ct.data, ct.data + ct.len, ';');
+    if (semi != NULL) ct.len = semi - ct.data;
+    while (ct.len > 0 && ngx_isspace(ct.data[ct.len - 1])) ct.len--;
+    for (i = 0; i < mcf->phase4_content_types->nelts; i++) {
+        ngx_str_t *arr = mcf->phase4_content_types->elts;
+        if (arr[i].len == ct.len && ngx_strncasecmp(arr[i].data, ct.data, ct.len) == 0) return 1;
+    }
+    return 0;
+}
+
+static ngx_int_t
+ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurity_conf_t *mcf, const char *wanted, const char *actual, const char *reason)
+{
+    u_char buf[2048];
+    u_char *p;
+    ngx_str_t euri, emethod, ect, elog, erule;
+    const char *mode = "safe";
+    const char *header_sent = r->header_sent ? "true" : "false";
+    ngx_http_modsecurity_ctx_t *ctx = ngx_http_modsecurity_get_module_ctx(r);
+    if (mcf->phase4_log_file == NULL || mcf->phase4_log_file->fd == NGX_INVALID_FILE) return NGX_OK;
+    ngx_http_modsecurity_json_escape(r->pool, &r->uri, &euri);
+    ngx_http_modsecurity_json_escape(r->pool, &r->method_name, &emethod);
+    ngx_http_modsecurity_json_escape(r->pool, &r->headers_out.content_type, &ect);
+    if (ctx) ngx_http_modsecurity_json_escape(r->pool, &ctx->last_intervention_log, &elog); else { elog.len=0; elog.data=(u_char*)""; }
+    if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_MINIMAL) mode = "minimal";
+    else if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_STRICT) mode = "strict";
+    ngx_http_modsecurity_extract_rule_id(r->pool, &elog, &erule);
+    p = ngx_snprintf(buf, sizeof(buf),
+        "{\"event\":\"phase4_intervention\",\"uri\":\"%V\",\"method\":\"%V\",\"status\":%ui,\"content_type\":\"%V\",\"header_sent\":%s,\"mode\":\"%s\",\"wanted_action\":\"%s\",\"actual_action\":\"%s\",\"reason\":\"%s\",\"intervention\":\"%V\",\"rule_id\":\"%V\"}\n",
+        &euri,&emethod,(ngx_uint_t)r->headers_out.status,&ect,header_sent,mode,wanted,actual,reason,&elog,&erule);
+    ngx_write_fd(mcf->phase4_log_file->fd, buf, p - buf);
+    return NGX_OK;
+}
+
+static void
+ngx_http_modsecurity_json_escape(ngx_pool_t *pool, ngx_str_t *src, ngx_str_t *dst)
+{
+    size_t i, extra = 0; u_char *d;
+    if (src == NULL || src->data == NULL) { dst->len=0; dst->data=(u_char*)""; return; }
+    for (i = 0; i < src->len; i++) if (src->data[i] < 0x20 || src->data[i] == '"' || src->data[i] == '\\') extra++;
+    dst->data = ngx_pnalloc(pool, src->len + extra + 1); if (dst->data == NULL) { dst->len=0; return; }
+    d = dst->data;
+    for (i = 0; i < src->len; i++) {
+        u_char c = src->data[i];
+        if (c == '"' || c == '\\') { *d++='\\'; *d++=c; }
+        else if (c < 0x20) { *d++=' '; }
+        else *d++=c;
+    }
+    dst->len = d - dst->data;
+}
+
+static void
+ngx_http_modsecurity_extract_rule_id(ngx_pool_t *pool, ngx_str_t *intervention, ngx_str_t *rule_id)
+{
+    size_t i;
+    rule_id->data = (u_char *)"";
+    rule_id->len = 0;
+    if (intervention == NULL || intervention->data == NULL) return;
+    for (i = 0; i + 4 < intervention->len; i++) {
+        if (ngx_strncasecmp(intervention->data + i, (u_char *)"id \"", 4) == 0) {
+            size_t j = i + 4;
+            while (j < intervention->len && intervention->data[j] >= '0' && intervention->data[j] <= '9') j++;
+            if (j > i + 4 && j < intervention->len && intervention->data[j] == '"') {
+                rule_id->len = j - (i + 4);
+                rule_id->data = ngx_pnalloc(pool, rule_id->len);
+                if (rule_id->data != NULL) ngx_memcpy(rule_id->data, intervention->data + i + 4, rule_id->len);
+                return;
+            }
+        }
+    }
 }
