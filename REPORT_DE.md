@@ -148,6 +148,51 @@
 - Wurde ein minimal reproduzierender Testfall dafür bereits upstream fixiert/archiviert? **Nicht belegbar aus den Quellen.**
 - Soll gewünschtes Verhalten bei späten phase:4-Interventionen strikt „Status muss ändern“ sein, oder ist „Body unterdrücken + ggf. Verbindung schließen“ akzeptabel? **Nicht eindeutig spezifiziert in den untersuchten Quellen.**
 
+
+## Vollauswertung Issue #336 (zentrale Quelle)
+### Gemeldete Symptome
+- Teilweise/beschädigte Responses, oft mit fehlendem Anfang des Inhalts („leading parts“ abgeschnitten) und teils „binär/vermischt“ wirkender Ausgabe.
+- Häufigkeitsmuster: Probleme vor allem bei größeren Dateien/Responses; genannt wurden u. a. ~39kB, >32kB, ~64kB, ~500kB.
+- Teilweise Timeouts bei experimentellen Zwischenständen (`issue336fix`) statt sofortiger Trunkierung.
+- In mehreren Berichten keine aussagekräftigen Fehler in Logs, obwohl Client-seitig klar defekte Auslieferung sichtbar war.
+
+### Betroffene Umgebungen (aus Kommentaren)
+- AlmaLinux 8.10 (mehrere Kernelstände) mit nginx/cwpsrv 1.15.10.
+- AlmaLinux 9.5 + nginx 1.26.2.
+- Debian Bullseye (nginx 1.18, apt), Debian Bookworm, Debian/EL gemischte CI-Setups.
+- nginx 1.26.0/1.26.2, später auch Meldung mit nginx 1.27.3.
+- Docker-Umgebungen inkl. Hinweise auf betroffene veröffentlichte Images/Tags.
+
+### Größen-/Buffer-Hinweise
+- Wiederholt genannt: **ab ~32kB** Trunkierung/Beschädigung.
+- Weitere Nennungen: **~39kB** (scrambled), **~64kB** Schwelle bei Zwischenfix-Tests, **~500kB** nur Teilseite (~70%).
+- Ein Nutzer nannte temporären Workaround mit größerem `proxy_buffer_size`/`proxy_buffers`; anderer Nutzer bestätigte, dass dieser Workaround nicht generell hilft.
+
+### Workarounds
+- Checkout/Downgrade auf `ef64996...` wurde mehrfach als funktionierend berichtet.
+- Vollständiges Entladen des Moduls (`load_module` entfernen) behebt laut Meldungen das Problem ebenfalls.
+- Erhöhung von Proxy-Buffern als temporärer Workaround in einzelnen Setups, aber nicht universell erfolgreich.
+
+### Maintainer-Aussagen in #336
+- Frühe Einordnung: Verdacht auf Zusammenhang mit #334; Bitte um reproduzierbare Daten.
+- Spätere Einordnung: der defekte Stand sei eher mit Commit `62639fa...` (Teil von #326) reproduzierbar, nicht nur mit `fb678c5...`.
+- Maintainer schlug temporären Branch `issue336fix` zum Gegencheck vor; Ergebnisse gemischt (teilweise behoben, teilweise Timeouts, teils Größenlimits).
+- Zentrale Entscheidung (Kommentar vom 2025-01-24): Root Cause noch unklar, daher Plan: **#334 und #326 revertieren**, CI-Tests ausbauen, danach sauber neu angehen.
+- Später in #336 explizit: „Bitte #344 und #345 ansehen“; #344 = Revert, #345 = zusätzliche Tests.
+
+### Verweise auf andere Issues/PRs aus #336
+- PRs/Issues: #334, #326, #344, #345, #273, #270, #255, #41.
+- Externe Verweise: ModSecurity-Issues #3333 (Docker-Hinweis) und #3336 (Interferenz-/Laufzeitverhalten).
+
+### Bestätigungen nach #344/#345
+- In #336 ist die Maintainer-Aussage dokumentiert, dass #344/#345 der empfohlene Weg sind.
+- Eindeutige, flächendeckende Nutzerbestätigung „nach #344/#345 überall behoben“ ist aus #336 allein **nicht lückenlos belegbar**; es gibt weiterhin Berichte zu truncation-artigen Effekten in manchen Umgebungen/Versionen.
+
+### Bedeutung von #336 für Revert-Entscheidung
+- #336 zeigt eine breite Nutzerbasis mit realen Regressionen (Trunkierung/Mangling/Timeouts), plattformübergreifend.
+- Die Revert-Entscheidung (#344) war damit ein Stabilisierungsschritt unter Produktionsdruck, nicht nur eine theoretische Code-Präferenz.
+- #345 ergänzt diese Entscheidung mit zusätzlichen Tests, um ähnliche Regressionen früher abzufangen.
+
 ## Quellen (direkte Links)
 - PR #344: https://github.com/owasp-modsecurity/ModSecurity-nginx/pull/344
 - PR #334: https://github.com/owasp-modsecurity/ModSecurity-nginx/pull/334
