@@ -1,11 +1,11 @@
 name: Quality Assurance new
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
 
-  # Default: none
+
+# Default: none
 permissions: {}
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
       - name: Setup Dependencies
         run: |
           sudo apt-get update -y -qq
-          sudo apt-get install -y make autoconf automake make pcre2-utils libyajl-dev libxml2-dev libmaxminddb-dev libcurl4-gnutls-dev $COMPDEPS
+          sudo apt-get install -y make autoconf automake pcre2-utils libpcre2-dev libyajl-dev libxml2-dev libmaxminddb-dev libcurl4-gnutls-dev $COMPDEPS
       - name: Get libModSecurity source
         uses: actions/checkout@v6
         with:
@@ -51,34 +51,7 @@ jobs:
       - name: Resolve latest Nginx version
         id: nginx_ref
         shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION="${NGINX_VERSION}"
-          echo "Requested NGINX_VERSION=${VERSION}"
-
-          if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.x$ ]]; then
-            PREFIX="release-${VERSION%.x}."
-            REF=$(git ls-remote --tags https://github.com/nginx/nginx.git "refs/tags/${PREFIX}*" \
-              | sed -E 's#.*refs/tags/##; s#\^\{\}##' \
-              | grep -E "^${PREFIX}[0-9]+$" \
-              | sort -V \
-              | tail -n 1)
-          elif [[ "${VERSION}" =~ ^release-[0-9]+\.[0-9]+\.[0-9]+$ || "${VERSION}" == "master" || "${VERSION}" == "main" ]]; then
-            REF="${VERSION}"
-          else
-            echo "Unsupported NGINX_VERSION=${VERSION}"
-            echo "Use e.g. 1.30.x, 1.29.x, 1.28.x or exact tag release-1.30.0"
-            exit 1
-          fi
-
-          if [[ -z "${REF}" ]]; then
-            echo "No matching Nginx tag found for ${VERSION}"
-            exit 1
-          fi
-
-          echo "Resolved Nginx ref: ${REF}"
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+        run: bash ModSecurity-nginx/.github/scripts/resolve-nginx-ref.sh
 
       - name: Get Nginx source
         uses: actions/checkout@v6
@@ -128,8 +101,9 @@ jobs:
           TEST_NGINX_BINARY=../objs/nginx prove modsecurity*.t
       - name: Start Nginx
         run: |
-          sudo cp /home/runner/work/ModSecurity-nginx/ModSecurity-nginx/ModSecurity-nginx/.github/nginx/docs/* /usr/local/nginx/html/
-          sudo /usr/local/nginx/sbin/nginx -c /home/runner/work/ModSecurity-nginx/ModSecurity-nginx/ModSecurity-nginx/.github/nginx/nginx.conf
+          sudo mkdir -p /usr/local/nginx/html
+          sudo cp "${{ github.workspace }}/ModSecurity-nginx/.github/nginx/docs/"* /usr/local/nginx/html/
+          sudo /usr/local/nginx/sbin/nginx -c "${{ github.workspace }}/ModSecurity-nginx/.github/nginx/nginx.conf"
       - name: Run attack test vhost 1
         run: |
           status=$(curl -sSo /dev/null -w %{http_code} -I -X GET -H "Host: modsectest1" "http://localhost/?q=attack")
@@ -221,7 +195,7 @@ jobs:
       - name: Start Nginx with redir
         run: |
           sudo killall nginx
-          sudo /usr/local/nginx/sbin/nginx -c /home/runner/work/ModSecurity-nginx/ModSecurity-nginx/ModSecurity-nginx/.github/nginx/nginx.conf.redir
+          sudo /usr/local/nginx/sbin/nginx -c "${{ github.workspace }}/ModSecurity-nginx/.github/nginx/nginx.conf.redir"
       - name: Run attack test vhost 1
         run: |
           status=$(curl -sSo /dev/null -w %{http_code} -I -X GET -H "Host: modsectest1" "http://localhost/?q=attack")
@@ -296,6 +270,7 @@ jobs:
     name: windows-nginx-${{ matrix.nginx_version }}
     runs-on: windows-2025
     strategy:
+      fail-fast: false
       matrix:
         nginx_version: ["1.30.x", "1.29.x", "1.28.x"]
     env:
@@ -311,37 +286,15 @@ jobs:
         with:
           msystem: UCRT64
           path-type: inherit
+      - name: Get ModSecurity-nginx workflow scripts
+        uses: actions/checkout@v6
+        with:
+          path: ModSecurity-nginx
+          fetch-depth: 1
       - name: Resolve latest Nginx version
         id: nginx_ref
         shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION="${NGINX_VERSION}"
-          echo "Requested NGINX_VERSION=${VERSION}"
-
-          if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.x$ ]]; then
-            PREFIX="release-${VERSION%.x}."
-            REF=$(git ls-remote --tags https://github.com/nginx/nginx.git "refs/tags/${PREFIX}*" \
-              | sed -E 's#.*refs/tags/##; s#\^\{\}##' \
-              | grep -E "^${PREFIX}[0-9]+$" \
-              | sort -V \
-              | tail -n 1)
-          elif [[ "${VERSION}" =~ ^release-[0-9]+\.[0-9]+\.[0-9]+$ || "${VERSION}" == "master" || "${VERSION}" == "main" ]]; then
-            REF="${VERSION}"
-          else
-            echo "Unsupported NGINX_VERSION=${VERSION}"
-            echo "Use e.g. 1.30.x, 1.29.x, 1.28.x or exact tag release-1.30.0"
-            exit 1
-          fi
-
-          if [[ -z "${REF}" ]]; then
-            echo "No matching Nginx tag found for ${VERSION}"
-            exit 1
-          fi
-
-          echo "Resolved Nginx ref: ${REF}"
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+        run: bash ModSecurity-nginx/.github/scripts/resolve-nginx-ref.sh
 
       - name: Get Nginx source
         uses: actions/checkout@v6
