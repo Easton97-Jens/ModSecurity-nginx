@@ -22,6 +22,7 @@
 
 #include "ngx_http_modsecurity_common.h"
 #include "stdio.h"
+#include <ctype.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 
@@ -542,7 +543,7 @@ ngx_http_modsecurity_phase4_validate_content_type(u_char *s, size_t len)
     if (len == 0 || ngx_strchr(s, '*') != NULL) return NGX_ERROR;
     for (i = 0; i < len; i++) {
         u_char c = s[i];
-        if (!(ngx_isalnum(c) || c == '/' || c == '.' || c == '+' || c == '-' )) return NGX_ERROR;
+        if (!(isalnum((unsigned char)c) || c == '/' || c == '.' || c == '+' || c == '-' )) return NGX_ERROR;
     }
     return (ngx_strchr(s, '/') != NULL) ? NGX_OK : NGX_ERROR;
 }
@@ -592,15 +593,15 @@ ngx_http_modsecurity_phase4_load_content_types_file(ngx_conf_t *cf, ngx_http_mod
     for (p = buf, line = buf; p <= buf + n; p++) {
         if (p == buf + n || *p == '\n' || *p == '\r') {
             *p = '\0'; end = p;
-            while (line < end && ngx_isspace(*line)) line++;
-            while (end > line && ngx_isspace(*(end-1))) *(--end) = '\0';
+            while (line < end && isspace((unsigned char)*line)) line++;
+            while (end > line && isspace((unsigned char)*(end-1))) *(--end) = '\0';
             if (line[0] && line[0] != '#') {
                 u_char *hash = (u_char *)ngx_strchr(line, '#');
                 u_char *semi = (u_char *)ngx_strchr(line, ';');
                 if (hash && (!semi || hash < semi)) *hash = '\0';
                 if (semi) *semi = '\0';
                 end = line + ngx_strlen(line);
-                while (end > line && ngx_isspace(*(end-1))) *(--end) = '\0';
+                while (end > line && isspace((unsigned char)*(end-1))) *(--end) = '\0';
                 ngx_strlow(line, line, end - line);
                 if (ngx_http_modsecurity_phase4_validate_content_type(line, end-line) != NGX_OK) {
                     ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "invalid content-type entry in modsecurity_phase4_content_types_file \"%V\": \"%s\"", path, line);

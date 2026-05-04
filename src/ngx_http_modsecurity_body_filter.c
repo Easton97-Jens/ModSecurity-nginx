@@ -14,6 +14,7 @@
  */
 
 #include <ngx_config.h>
+#include <ctype.h>
 
 #ifndef MODSECURITY_DDEBUG
 #define MODSECURITY_DDEBUG 0
@@ -224,7 +225,7 @@ ngx_http_modsecurity_phase4_in_scope(ngx_http_request_t *r)
     ct = r->headers_out.content_type;
     semi = (u_char *)ngx_strlchr(ct.data, ct.data + ct.len, ';');
     if (semi != NULL) ct.len = semi - ct.data;
-    while (ct.len > 0 && ngx_isspace(ct.data[ct.len - 1])) ct.len--;
+    while (ct.len > 0 && isspace((unsigned char)ct.data[ct.len - 1])) ct.len--;
     for (i = 0; i < mcf->phase4_content_types->nelts; i++) {
         ngx_str_t *arr = mcf->phase4_content_types->elts;
         if (arr[i].len == ct.len && ngx_strncasecmp(arr[i].data, ct.data, ct.len) == 0) return 1;
@@ -237,7 +238,7 @@ ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurit
 {
     u_char buf[2048];
     u_char *p;
-    ngx_str_t euri, emethod, ect, elog, erule;
+    ngx_str_t euri, emethod, ect, elog, erule, raw_log;
     const char *mode = "safe";
     const char *header_sent = r->header_sent ? "true" : "false";
     ngx_http_modsecurity_ctx_t *ctx = ngx_http_modsecurity_get_module_ctx(r);
@@ -245,13 +246,20 @@ ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurit
     ngx_http_modsecurity_json_escape(r->pool, &r->uri, &euri);
     ngx_http_modsecurity_json_escape(r->pool, &r->method_name, &emethod);
     ngx_http_modsecurity_json_escape(r->pool, &r->headers_out.content_type, &ect);
-    if (ctx) ngx_http_modsecurity_json_escape(r->pool, &ctx->last_intervention_log, &elog); else { elog.len=0; elog.data=(u_char*)""; }
+    if (ctx) {
+        raw_log = ctx->last_intervention_log;
+        ngx_http_modsecurity_extract_rule_id(r->pool, &raw_log, &erule);
+        ngx_http_modsecurity_json_escape(r->pool, &raw_log, &elog);
+    } else {
+        raw_log.len = 0; raw_log.data = (u_char *)"";
+        elog.len = 0; elog.data=(u_char*)"";
+        erule.len = 0; erule.data=(u_char*)"";
+    }
     if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_MINIMAL) mode = "minimal";
     else if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_STRICT) mode = "strict";
-    ngx_http_modsecurity_extract_rule_id(r->pool, &elog, &erule);
     p = ngx_snprintf(buf, sizeof(buf),
-        "{\"event\":\"phase4_intervention\",\"uri\":\"%V\",\"method\":\"%V\",\"status\":%ui,\"content_type\":\"%V\",\"header_sent\":%s,\"mode\":\"%s\",\"wanted_action\":\"%s\",\"actual_action\":\"%s\",\"reason\":\"%s\",\"intervention\":\"%V\",\"rule_id\":\"%V\"}\n",
-        &euri,&emethod,(ngx_uint_t)r->headers_out.status,&ect,header_sent,mode,wanted,actual,reason,&elog,&erule);
+        "{\"event\":\"phase4_intervention\",\"uri\":\"%V\",\"method\":\"%V\",\"response_status\":%ui,\"waf_status\":%i,\"content_type\":\"%V\",\"header_sent\":%s,\"mode\":\"%s\",\"wanted_action\":\"%s\",\"actual_action\":\"%s\",\"reason\":\"%s\",\"intervention\":\"%V\",\"rule_id\":\"%V\"}\n",
+        &euri,&emethod,(ngx_uint_t)r->headers_out.status,ctx ? (int) ctx->last_intervention_status : 0,&ect,header_sent,mode,wanted,actual,reason,&elog,&erule);
     ngx_write_fd(mcf->phase4_log_file->fd, buf, p - buf);
     return NGX_OK;
 }
