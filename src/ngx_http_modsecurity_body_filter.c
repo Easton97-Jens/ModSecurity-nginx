@@ -30,6 +30,7 @@ static ngx_int_t ngx_http_modsecurity_phase4_handle_intervention(ngx_http_reques
 static void ngx_http_modsecurity_json_escape(ngx_pool_t *pool, ngx_str_t *src, ngx_str_t *dst);
 static void ngx_http_modsecurity_extract_rule_id(ngx_pool_t *pool, ngx_str_t *intervention, ngx_str_t *rule_id);
 static ngx_str_t ngx_http_modsecurity_normalize_content_type(ngx_pool_t *pool, ngx_str_t in);
+static ngx_str_t ngx_http_modsecurity_sanitize_intervention(ngx_pool_t *pool, ngx_str_t in);
 
 /* XXX: check behaviour on few body filters installed */
 ngx_int_t
@@ -248,7 +249,7 @@ static ngx_int_t
 ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurity_conf_t *mcf, const char *wanted, const char *actual, const char *reason)
 {
     u_char *p;
-    ngx_str_t euri, emethod, ect, elog, erule, raw_log;
+    ngx_str_t euri, emethod, ect, elog, erule, raw_log, slog;
     const char *mode = "safe";
     const char *header_sent = r->header_sent ? "true" : "false";
     ngx_http_modsecurity_ctx_t *ctx = ngx_http_modsecurity_get_module_ctx(r);
@@ -260,7 +261,8 @@ ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurit
     if (ctx) {
         raw_log = ctx->last_intervention_log;
         ngx_http_modsecurity_extract_rule_id(r->pool, &raw_log, &erule);
-        ngx_http_modsecurity_json_escape(r->pool, &raw_log, &elog);
+        slog = ngx_http_modsecurity_sanitize_intervention(r->pool, raw_log);
+        ngx_http_modsecurity_json_escape(r->pool, &slog, &elog);
     } else {
         raw_log.len = 0; raw_log.data = (u_char *)"";
         elog.len = 0; elog.data=(u_char*)"";
@@ -294,6 +296,26 @@ ngx_http_modsecurity_normalize_content_type(ngx_pool_t *pool, ngx_str_t in)
     out.data = ngx_pnalloc(pool, out.len);
     if (out.data == NULL) { out.len = 0; return out; }
     for (i = 0; i < out.len; i++) out.data[i] = ngx_tolower(in.data[i]);
+    return out;
+}
+
+static ngx_str_t
+ngx_http_modsecurity_sanitize_intervention(ngx_pool_t *pool, ngx_str_t in)
+{
+    ngx_str_t out = ngx_string("redacted");
+    u_char *id, *msg, *op;
+    size_t len = 0;
+    id = (u_char *)ngx_strstr(in.data, "id \"");
+    msg = (u_char *)ngx_strstr(in.data, "msg \"");
+    op = (u_char *)ngx_strstr(in.data, "Operator");
+    if (id == NULL && msg == NULL && op == NULL) {
+        return out;
+    }
+    len = 9 + (id ? 10 : 0) + (msg ? 12 : 0) + (op ? 10 : 0);
+    out.data = ngx_pnalloc(pool, len);
+    if (out.data == NULL) return ngx_string("redacted");
+    out.len = ngx_snprintf(out.data, len, "id:%s msg:%s op:%s",
+        id ? "present" : "-", msg ? "present" : "-", op ? "present" : "-") - out.data;
     return out;
 }
 

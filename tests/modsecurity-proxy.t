@@ -84,6 +84,7 @@ http {
         }
         location /phase4 {
             modsecurity on;
+            modsecurity_phase4_mode strict;
             modsecurity_rules '
                 SecRuleEngine On
                 SecResponseBodyAccess On
