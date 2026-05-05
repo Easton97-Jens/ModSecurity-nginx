@@ -302,18 +302,22 @@ ngx_http_modsecurity_normalize_content_type(ngx_pool_t *pool, ngx_str_t in)
 static ngx_str_t
 ngx_http_modsecurity_sanitize_intervention(ngx_pool_t *pool, ngx_str_t in)
 {
-    ngx_str_t out = ngx_string("redacted");
+    static ngx_str_t redacted = { sizeof("redacted") - 1, (u_char *) "redacted" };
+    ngx_str_t out = redacted;
     u_char *id, *msg, *op;
     size_t len = 0;
+    if (in.data == NULL || in.len == 0) {
+        return redacted;
+    }
     id = (u_char *)ngx_strstr(in.data, "id \"");
     msg = (u_char *)ngx_strstr(in.data, "msg \"");
     op = (u_char *)ngx_strstr(in.data, "Operator");
     if (id == NULL && msg == NULL && op == NULL) {
-        return out;
+        return redacted;
     }
     len = 9 + (id ? 10 : 0) + (msg ? 12 : 0) + (op ? 10 : 0);
     out.data = ngx_pnalloc(pool, len);
-    if (out.data == NULL) return ngx_string("redacted");
+    if (out.data == NULL) return redacted;
     out.len = ngx_snprintf(out.data, len, "id:%s msg:%s op:%s",
         id ? "present" : "-", msg ? "present" : "-", op ? "present" : "-") - out.data;
     return out;

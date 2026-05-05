@@ -176,11 +176,17 @@ ngx_http_modsecurity_process_intervention (Transaction *transaction, ngx_http_re
     ctx->last_intervention_log.data = NULL;
     if (intervention.log != NULL) {
         size_t l = ngx_strlen(intervention.log);
-        u_char *cp = ngx_pnalloc(r->pool, l);
+        u_char *cp = ngx_pnalloc(r->pool, l + 1);
         if (cp != NULL) {
             ngx_memcpy(cp, intervention.log, l);
+            cp[l] = '\0';
             ctx->last_intervention_log.data = cp;
             ctx->last_intervention_log.len = l;
+        } else {
+            if (intervention.log != NULL) {
+                free(intervention.log);
+            }
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
     }
 
