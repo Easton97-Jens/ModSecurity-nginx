@@ -59,7 +59,7 @@ $t->write_file('/m', 'Hello minimal');
 $t->write_file('/s', 'Hello safe');
 $t->write_file('/x', 'Hello strict');
 $t->run();
-$t->plan(10);
+$t->plan(12);
 
 like(http_get('/m'), qr/Hello minimal/, 'minimal no fake deny');
 like(http_get('/s'), qr/Hello safe/, 'safe no fake deny');
@@ -71,5 +71,8 @@ like($log, qr/"reason":"mode_safe"|"reason":"headers_already_sent"/, 'safe reaso
 like($log, qr/"actual_action":"connection_abort"/, 'strict action logged');
 like($log, qr/"event":"phase4_intervention"/, 'event field present');
 like($log, qr/"header_sent":true/, 'json boolean header_sent');
-unlike($log, qr/\n.*\n/s, 'single-line json entries');
 unlike($log, qr/Hello minimal|Hello safe|Hello strict/, 'no response body data in phase4 log');
+
+my @lines = grep { length $_ } split /\n/, $log;
+ok(@lines >= 1, 'phase4 log has one or more json lines');
+ok(!grep { $_ !~ /^\{.*\}$/ } @lines, 'each log line is a single JSON object line');
