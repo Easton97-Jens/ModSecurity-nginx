@@ -84,6 +84,7 @@ http {
         }
         location /phase4 {
             modsecurity on;
+            modsecurity_phase4_mode strict;
             modsecurity_rules '
                 SecRuleEngine On
                 SecResponseBodyAccess On
@@ -191,6 +192,14 @@ EOF
 			select undef, undef, undef, 0.1;
 			print $client 'AND-THIS';
 
+		} elsif ($uri =~ m{^/phase4\?what=(redirect302|redirect301|block401|block403)$}) {
+			print $client <<"EOF";
+HTTP/1.1 200 OK
+Connection: close
+Content-Type: text/plain
+
+phase4 trigger
+EOF
 		} else {
 
 			print $client <<"EOF";
