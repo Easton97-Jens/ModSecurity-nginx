@@ -139,6 +139,82 @@ ngx_inline char *ngx_str_to_char(ngx_str_t a, ngx_pool_t *p)
 }
 
 
+static ngx_int_t
+ngx_http_modsecurity_log_intervention(ngx_http_request_t *r,
+    ngx_http_modsecurity_ctx_t *ctx, ngx_http_modsecurity_conf_t *mcf,
+    const ModSecurityIntervention *intervention)
+{
+    size_t len;
+
+    ngx_str_null(&ctx->last_intervention_log);
+    if (mcf->phase4_log_file != NULL && intervention->log != NULL) {
+        len = ngx_strlen(intervention->log);
+        ctx->last_intervention_log.data = ngx_pnalloc(r->pool, len + 1);
+        if (ctx->last_intervention_log.data == NULL) {
+            return NGX_ERROR;
+        }
+        ngx_memcpy(ctx->last_intervention_log.data, intervention->log, len + 1);
+        ctx->last_intervention_log.len = len;
+    }
+    if (mcf->use_error_log) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "%s",
+            intervention->log != NULL ? intervention->log :
+            "(no log message was specified)");
+    }
+    return NGX_OK;
+}
+
+
+static int
+ngx_http_modsecurity_process_intervention_redirect(ngx_http_request_t *r,
+    ngx_http_modsecurity_ctx_t *ctx,
+    const ModSecurityIntervention *intervention)
+{
+    ngx_table_elt_t *location;
+    u_char *url;
+    size_t len;
+    size_t i;
+
+    if (r->header_sent) {
+        ctx->intervention_late = 1;
+        ctx->intervention_failed = 0;
+        return NGX_ERROR;
+    }
+    len = ngx_strlen(intervention->url);
+    for (i = 0; i < len; i++) {
+        if (intervention->url[i] == '\r' || intervention->url[i] == '\n') {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                "ModSecurity: intervention redirect URL contains CR or LF");
+            return NGX_HTTP_BAD_REQUEST;
+        }
+    }
+    url = ngx_pnalloc(r->pool, len);
+    if (url == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_memcpy(url, intervention->url, len);
+    location = ngx_list_push(&r->headers_out.headers);
+    if (location == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_http_clear_location(r);
+    ngx_str_set(&location->key, "Location");
+    location->value.data = url;
+    location->value.len = len;
+    location->hash = 1;
+    r->headers_out.location = location;
+#if defined(MODSECURITY_SANITY_CHECKS) && (MODSECURITY_SANITY_CHECKS)
+    if (ngx_http_modsecurity_store_ctx_header(r, &location->key,
+            &location->value) != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+#endif
+    ctx->intervention_redirect_location_installed = 1;
+    ctx->intervention_failed = 0;
+    return intervention->status;
+}
+
+
 int
 ngx_http_modsecurity_process_intervention (Transaction *transaction,
     ngx_http_request_t *r, ngx_int_t early_log)
@@ -146,10 +222,6 @@ ngx_http_modsecurity_process_intervention (Transaction *transaction,
     ModSecurityIntervention intervention;
     ngx_http_modsecurity_ctx_t *ctx;
     ngx_http_modsecurity_conf_t *mcf;
-    ngx_table_elt_t *location;
-    u_char *url;
-    size_t len;
-    size_t i;
     int result;
 
     ctx = ngx_http_modsecurity_get_module_ctx(r);
@@ -172,61 +244,14 @@ ngx_http_modsecurity_process_intervention (Transaction *transaction,
     result = r->header_sent ? NGX_ERROR : NGX_HTTP_INTERNAL_SERVER_ERROR;
     ctx->intervention_failed = 1;
     ctx->last_intervention_status = intervention.status;
-    ngx_str_null(&ctx->last_intervention_log);
-    if (mcf->phase4_log_file != NULL && intervention.log != NULL) {
-        len = ngx_strlen(intervention.log);
-        ctx->last_intervention_log.data = ngx_pnalloc(r->pool, len + 1);
-        if (ctx->last_intervention_log.data == NULL) {
-            goto done;
-        }
-        ngx_memcpy(ctx->last_intervention_log.data, intervention.log, len + 1);
-        ctx->last_intervention_log.len = len;
-    }
-    if (mcf->use_error_log) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "%s",
-            intervention.log != NULL ? intervention.log :
-            "(no log message was specified)");
+    if (ngx_http_modsecurity_log_intervention(r, ctx, mcf,
+            &intervention) != NGX_OK) {
+        goto done;
     }
 
     if (intervention.url != NULL) {
-        if (r->header_sent) {
-            ctx->intervention_late = 1;
-            ctx->intervention_failed = 0;
-            goto done;
-        }
-        len = ngx_strlen(intervention.url);
-        for (i = 0; i < len; i++) {
-            if (intervention.url[i] == '\r' || intervention.url[i] == '\n') {
-                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                    "ModSecurity: intervention redirect URL contains CR or LF");
-                result = NGX_HTTP_BAD_REQUEST;
-                goto done;
-            }
-        }
-        url = ngx_pnalloc(r->pool, len);
-        if (url == NULL) {
-            goto done;
-        }
-        ngx_memcpy(url, intervention.url, len);
-        location = ngx_list_push(&r->headers_out.headers);
-        if (location == NULL) {
-            goto done;
-        }
-        ngx_http_clear_location(r);
-        ngx_str_set(&location->key, "Location");
-        location->value.data = url;
-        location->value.len = len;
-        location->hash = 1;
-        r->headers_out.location = location;
-#if defined(MODSECURITY_SANITY_CHECKS) && (MODSECURITY_SANITY_CHECKS)
-        if (ngx_http_modsecurity_store_ctx_header(r, &location->key,
-                &location->value) != NGX_OK) {
-            goto done;
-        }
-#endif
-        ctx->intervention_redirect_location_installed = 1;
-        ctx->intervention_failed = 0;
-        result = intervention.status;
+        result = ngx_http_modsecurity_process_intervention_redirect(r, ctx,
+            &intervention);
     } else if (intervention.status != 200) {
         msc_update_status_code(ctx->modsec_transaction, intervention.status);
         if (early_log) {
@@ -252,6 +277,7 @@ done:
     if (intervention.url != NULL) free(intervention.url);
     return result;
 }
+
 
 void
 ngx_http_modsecurity_cleanup(void *data)

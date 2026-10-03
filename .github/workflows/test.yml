@@ -19,8 +19,8 @@ jobs:
       CC: "/usr/bin/${{ matrix.compiler }}"
     steps:
       - uses: actions/checkout@v4
-      - name: Run standalone Phase4 helper regressions
-        run: python3 tests/test_phase4_runtime.py -v
+      - name: Run standalone connector helper regressions
+        run: python3 -m unittest discover -s tests -p 'test_*runtime.py' -v
 
   build-linux:
     permissions:
