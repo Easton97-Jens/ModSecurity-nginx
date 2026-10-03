@@ -8,6 +8,20 @@ on:
 permissions: {}
 
 jobs:
+  phase4-unit-tests:
+    permissions:
+      contents: read
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: "/usr/bin/${{ matrix.compiler }}"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run standalone Phase4 helper regressions
+        run: python3 tests/test_phase4_runtime.py -v
+
   build-linux:
     permissions:
       contents: read
@@ -58,7 +72,7 @@ jobs:
           fetch-depth: 1
       - name: Copy ModSecurity-nginx tests to nginx/test
         run: |
-          cp ModSecurity-nginx/tests/* nginx/test
+          cp ModSecurity-nginx/tests/*.t ModSecurity-nginx/tests/*.pl nginx/test
       - name: Build nginx with ModSecurity-nginx module
         working-directory: nginx
         run: |
@@ -294,7 +308,7 @@ jobs:
       - name: Copy ModSecurity-nginx tests to nginx/test
         working-directory: nginx/test
         run: |
-          cp ../objs/lib/ModSecurity-nginx/tests/* .
+          cp ../objs/lib/ModSecurity-nginx/tests/*.t ../objs/lib/ModSecurity-nginx/tests/*.pl .
       - name: Remove /usr/bin/link conflicting with MSVC link.exe
         run: |
           set -ex

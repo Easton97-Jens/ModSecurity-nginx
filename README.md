@@ -178,19 +178,37 @@ String can contain variables.
 
 modsecurity_phase4_mode
 ------------------------
-**syntax:** *modsecurity_phase4_mode minimal | safe | strict*
+**syntax:** *modsecurity_phase4_mode off | safe | strict*
 
 **context:** *http, server, location*
 
-Controls how phase 4 interventions are handled when response headers were already sent.
+**default:** *off*
 
-modsecurity_phase4_content_types_file
---------------------------------------
-**syntax:** *modsecurity_phase4_content_types_file &lt;path&gt;*
+Controls the connector's additional phase 4 intervention policy. `safe` logs a
+late intervention as `log_only`; `strict` aborts the connection once headers
+are sent. Before headers are sent, both modes can apply the intervention's HTTP
+status. Neither mode guarantees a clean 403 after headers have been sent.
+
+`off` uses the native intervention path and disables the connector's additional
+phase 4 policy and body budget. It does not disable ModSecurity response-body
+inspection; late native interventions can still fail the response. Configure
+inspection with `SecResponseBodyAccess`, `SecResponseBodyMimeType`, and
+`SecResponseBodyMimeTypesClear` in ModSecurity rules.
+
+modsecurity_phase4_body_limit
+-----------------------------
+**syntax:** *modsecurity_phase4_body_limit &lt;size&gt;*
 
 **context:** *http, server, location*
 
-Loads the list of response content types that are in scope for phase 4 handling from a file.
+**default:** *1m (1 MiB)*
+
+Sets a positive cumulative response-body budget for `safe` and `strict`, in
+bytes or nginx size notation such as `256k` or `2m`. The connector counts bytes
+seen, including file-backed buffers, and rejects a chunk that would exceed the
+budget before forwarding that chunk. This is independent of the engine's
+response-body limit and does not introduce global response buffering.
+`off` ignores this budget but retains overflow checks.
 
 modsecurity_phase4_log
 ----------------------
@@ -199,6 +217,22 @@ modsecurity_phase4_log
 **context:** *http, server, location*
 
 Sets the file used for phase 4 JSON event logging.
+
+### Phase 4 migration
+
+This branch adopts the phase 4 behavior from
+[ModSecurity-conector at b0f3bdab429717b5b0311c30c5b4d1153c672ac0](https://github.com/Easton97-Jens/ModSecurity-conector/tree/b0f3bdab429717b5b0311c30c5b4d1153c672ac0/connectors/nginx/src),
+adapted for this standalone nginx module. It does not require that repository's
+multi-connector runtime.
+
+This changes configuration compatibility: `minimal` is rejected, the default
+mode changes from `safe` to `off`, and
+`modsecurity_phase4_content_types_file` is removed. Set `safe` or `strict`
+explicitly when migrating, and move MIME selection into ModSecurity rules.
+See [English](docs/phase4-handling.en.md) or
+[Deutsch](docs/phase4-handling.de.md) for the behavior, limits, logging schema,
+and examples. The documentation describes the source implementation; test
+results from the source repository are not validation of this migration.
 
 modsecurity_use_error_log
 -----------
@@ -295,5 +329,4 @@ feel free to open GitHub issues requesting for new features. Before opening a ne
 
 Having our packages in distros on time is something we highly desire. Let us know if
 there is anything we can do to facilitate your work as a packager.
-
 
