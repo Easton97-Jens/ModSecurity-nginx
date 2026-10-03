@@ -6,8 +6,9 @@ use lib 'lib';
 use Test::Nginx;
 
 my $t = Test::Nginx->new()->has(qw/http/)->plan(3);
-mkdir($t->testdir() . '/logs') unless -d $t->testdir() . '/logs';
-$t->write_file('logs/error.log', '');
+# Test::Nginx always reads this file in its two cleanup assertions, even
+# when nginx -t exits during configuration parsing before opening its log.
+$t->write_file('error.log', '');
 my $binary = $ENV{TEST_NGINX_BINARY} || ($t->testdir() . '/../nginx');
 
 for my $case (
@@ -32,6 +33,6 @@ http {
 }
 EOF
     my $prefix = $t->testdir();
-    my $out = `"$binary" -p "$prefix/" -c nginx.conf -t 2>&1`;
+    my $out = `"$binary" -p "$prefix/" -c nginx.conf -e error.log -t 2>&1`;
     like($out, $expected, $label);
 }

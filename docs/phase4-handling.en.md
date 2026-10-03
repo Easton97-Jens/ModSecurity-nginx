@@ -93,19 +93,33 @@ The engine decides response-body inspection using `SecResponseBodyAccess`,
 `SecResponseBodyMimeType`, and `SecResponseBodyMimeTypesClear`. There is no
 connector content-type allowlist or connector MIME-based downgrade.
 
-For example, add these directives to your ModSecurity configuration or an
-inline `modsecurity_rules` block:
+For example, reset the MIME list in one rule load, then add the selected types
+in a separate load:
 
-```apache
-SecResponseBodyAccess On
-SecResponseBodyMimeTypesClear
-SecResponseBodyMimeType text/html text/plain application/json
+```nginx
+modsecurity_rules 'SecResponseBodyMimeTypesClear';
+modsecurity_rules '
+    SecResponseBodyAccess On
+    SecResponseBodyMimeType text/html text/plain application/json
+';
 ```
 
-The standalone [engine MIME example](examples/phase4-engine-mime.conf) is a
-ModSecurity rules file, not an nginx include. Load it with
-`modsecurity_rules_file` alongside your other rules if you use it. The complete
-nginx examples below configure MIME selection inline.
+The reset is separate because libModSecurity's
+[merge implementation](https://raw.githubusercontent.com/owasp-modsecurity/ModSecurity/v3/master/headers/modsecurity/rules_set_properties.h)
+can clear MIME values added in the same rule load.
+
+The standalone [engine MIME example](examples/phase4-engine-mime.conf) contains
+MIME additions and enables response-body access. It is a ModSecurity rules
+file, not an nginx include. To replace the engine's MIME list with this file,
+load the reset first, then the file, alongside your other rules:
+
+```nginx
+modsecurity_rules 'SecResponseBodyMimeTypesClear';
+modsecurity_rules_file /etc/modsecurity/phase4-engine-mime.conf;
+```
+
+The complete nginx examples below configure MIME selection inline using the
+same separate-load sequence.
 
 Engine selection does not disable the independent connector body budget in
 `safe` or `strict`.

@@ -20,10 +20,12 @@ http {
         modsecurity on;
         modsecurity_phase4_mode strict;
         modsecurity_phase4_log %%TESTDIR%%/phase4-content-types.log;
+        # Separate loads exercise the engine's sequential clear/add merge.
+        modsecurity_rules 'SecResponseBodyMimeType text/plain';
+        modsecurity_rules 'SecResponseBodyMimeTypesClear';
         modsecurity_rules '
             SecRuleEngine On
             SecResponseBodyAccess On
-            SecResponseBodyMimeTypesClear
             SecResponseBodyMimeType application/json
             SecRule RESPONSE_BODY "@rx HIT" "id:920001,phase:4,deny,log,status:403"
         ';
@@ -42,7 +44,7 @@ $t->plan(8);
 
 is(http_get('/json'), '', 'engine-selected JSON triggers strict late abort');
 like(http_get('/unknown'), qr/HIT PNG/, 'engine-excluded image body continues');
-like(http_get('/plain'), qr/HIT PLAIN/, 'engine MIME override excludes default text/plain');
+like(http_get('/plain'), qr/HIT PLAIN/, 'engine MIME clear/add override excludes inherited text/plain');
 my $log = $t->read_file('phase4-content-types.log');
 my @events;
 my $valid_json = eval {

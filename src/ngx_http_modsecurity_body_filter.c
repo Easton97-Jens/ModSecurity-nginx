@@ -413,7 +413,7 @@ ngx_http_modsecurity_phase4_handle_intervention(ngx_http_request_t *r,
         status = ctx->last_intervention_status >= 300
             ? ctx->last_intervention_status : NGX_HTTP_FORBIDDEN;
         log_result = ngx_http_modsecurity_phase4_log_event(r, mcf, wanted,
-            wanted[0] == 'r' ? "redirect" : "deny_status",
+            "deny_status",
             "response_not_committed");
         ctx->intervention_triggered = 1;
         if (log_result != NGX_OK) {

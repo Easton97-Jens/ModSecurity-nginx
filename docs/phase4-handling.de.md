@@ -100,19 +100,34 @@ Die Engine entscheidet über die Response-Body-Prüfung anhand von
 `SecResponseBodyMimeTypesClear`. Es gibt keine Connector-Content-Type-Liste
 und keine MIME-basierte Degradierung durch den Connector.
 
-Diese Direktiven können beispielsweise in die ModSecurity-Konfiguration oder
-einen Inline-`modsecurity_rules`-Block aufgenommen werden:
+Beispielsweise die MIME-Liste in einem Regel-Ladevorgang zurücksetzen und
+die ausgewählten Typen in einem getrennten Ladevorgang hinzufügen:
 
-```apache
-SecResponseBodyAccess On
-SecResponseBodyMimeTypesClear
-SecResponseBodyMimeType text/html text/plain application/json
+```nginx
+modsecurity_rules 'SecResponseBodyMimeTypesClear';
+modsecurity_rules '
+    SecResponseBodyAccess On
+    SecResponseBodyMimeType text/html text/plain application/json
+';
 ```
 
-Das eigenständige [Engine-MIME-Beispiel](examples/phase4-engine-mime.conf) ist
-eine ModSecurity-Regeldatei, kein nginx-Include. Bei Nutzung zusätzlich zu den
-anderen Regeln mit `modsecurity_rules_file` laden. Die vollständigen
-nginx-Beispiele unten konfigurieren die MIME-Auswahl inline.
+Das Zurücksetzen erfolgt getrennt, weil die
+[Merge-Implementierung von libModSecurity](https://raw.githubusercontent.com/owasp-modsecurity/ModSecurity/v3/master/headers/modsecurity/rules_set_properties.h)
+MIME-Werte entfernen kann, die im selben Regel-Ladevorgang hinzugefügt werden.
+
+Das eigenständige [Engine-MIME-Beispiel](examples/phase4-engine-mime.conf)
+enthält MIME-Ergänzungen und aktiviert die Response-Body-Prüfung. Es ist eine
+ModSecurity-Regeldatei, kein nginx-Include. Um die MIME-Liste der Engine durch
+diese Datei zu ersetzen, zuerst das Zurücksetzen und dann die Datei zusätzlich
+zu den anderen Regeln laden:
+
+```nginx
+modsecurity_rules 'SecResponseBodyMimeTypesClear';
+modsecurity_rules_file /etc/modsecurity/phase4-engine-mime.conf;
+```
+
+Die vollständigen nginx-Beispiele unten konfigurieren die MIME-Auswahl inline
+mit derselben Reihenfolge getrennter Ladevorgänge.
 
 Die Engine-Auswahl deaktiviert das unabhängige Connector-Body-Budget in
 `safe` oder `strict` nicht.

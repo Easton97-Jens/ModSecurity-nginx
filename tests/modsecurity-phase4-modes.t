@@ -6,7 +6,9 @@ BEGIN { use FindBin; chdir($FindBin::Bin); }
 use lib 'lib';
 use Test::Nginx;
 
-my $t = Test::Nginx->new()->has(qw/http/);
+# Native off/default late-deny finalization intentionally causes the nginx
+# header-already-sent alert. Audit those alerts explicitly below.
+my $t = Test::Nginx->new()->has(qw/http/)->todo_alerts();
 $t->write_file_expand('nginx.conf', <<'EOC');
 %%TEST_GLOBALS%%
 daemon off;
@@ -37,7 +39,7 @@ for my $mode (qw/off default safe strict/) {
     $t->write_file('/' . $mode, 'Hello ' . $mode);
 }
 $t->run();
-$t->plan(15);
+$t->plan(19);
 
 is(http_get('/off'), '', 'off preserves native late-deny failure');
 is(http_get('/default'), '', 'off is the default');
@@ -63,3 +65,14 @@ is($event{'/strict'}->{mode}, 'strict', 'strict mode logged');
 ok(@events && !grep({ !$_->{header_sent} } @events), 'header_sent is true for late interventions');
 ok(@events && !grep({ $_->{event} ne 'phase4_intervention' } @events), 'event kind is stable');
 unlike($log, qr/Hello off|Hello default|Hello safe|Hello strict/, 'response body is absent from Phase4 log');
+
+# Stop first so the explicit alert audit includes all worker output.
+$t->stop();
+my @alerts = $t->read_file('error.log') =~ /^.*\[alert\].*$/gm;
+my $expected_alert = qr/\[alert\].*header already sent\b.*request: "GET \/(?:off|default) HTTP\/1\.[01]"/;
+my @late_alerts = grep { /$expected_alert/ } @alerts;
+is(scalar @late_alerts, 2, 'native off/default each cause one expected late-finalization alert');
+is(scalar(grep { /request: "GET \/off HTTP\/1\.[01]"/ } @late_alerts), 1, 'explicit off has one expected alert');
+is(scalar(grep { /request: "GET \/default HTTP\/1\.[01]"/ } @late_alerts), 1, 'default off has one expected alert');
+my @unexpected_alerts = grep { !/$expected_alert/ } @alerts;
+is(join("\n", @unexpected_alerts), '', 'no unexpected nginx alerts');

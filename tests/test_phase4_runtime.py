@@ -428,11 +428,16 @@ int main(int argc, char **argv)
         CHECK(ngx_http_modsecurity_process_response_intervention(&request, &ctx, &conf) == 500);
         CHECK(ctx.intervention_triggered && event_calls == 0);
     } else if (strcmp(argv[1], "uncommitted-deny") == 0) {
-        native_result = 403; ctx.last_intervention_status = 403;
-        CHECK(ngx_http_modsecurity_process_response_intervention(&request, &ctx, &conf) == 403);
-        CHECK(ctx.intervention_triggered && event_calls == 1);
-        CHECK(strcmp(last_action, "deny_status") == 0);
-        CHECK(strcmp(last_reason, "response_not_committed") == 0);
+        const ngx_int_t statuses[] = {403, 302};
+        for (size_t i = 0; i < sizeof(statuses) / sizeof(statuses[0]); i++) {
+            ctx.phase4_headers_checked = 0; ctx.intervention_triggered = 0;
+            event_calls = 0; native_result = statuses[i];
+            ctx.last_intervention_status = statuses[i];
+            CHECK(ngx_http_modsecurity_process_response_intervention(&request, &ctx, &conf) == statuses[i]);
+            CHECK(ctx.intervention_triggered && event_calls == 1);
+            CHECK(strcmp(last_action, "deny_status") == 0);
+            CHECK(strcmp(last_reason, "response_not_committed") == 0);
+        }
     } else if (strcmp(argv[1], "log-failure-safe") == 0) {
         request.header_sent = 1; native_result = -1; native_late = 1; log_result = NGX_ERROR;
         CHECK(ngx_http_modsecurity_process_response_intervention(&request, &ctx, &conf) == NGX_ERROR);
