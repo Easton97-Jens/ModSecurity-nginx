@@ -18,6 +18,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BODY = ROOT / "src" / "ngx_http_modsecurity_body_filter.c"
+MODULE = ROOT / "src" / "ngx_http_modsecurity_module.c"
 
 
 def matching_delimiter(source: str, opening: int, left: str, right: str) -> int:
@@ -59,7 +60,13 @@ typedef intptr_t ssize_t;
 #endif
 typedef unsigned char u_char;
 typedef int ngx_int_t;
-typedef struct { int unused; } ngx_pool_t;
+typedef struct ngx_http_request_s ngx_http_request_t;
+typedef struct ngx_pool_cleanup_s {
+    void (*handler)(void *);
+    void *data;
+    struct ngx_pool_cleanup_s *next;
+} ngx_pool_cleanup_t;
+typedef struct { ngx_pool_cleanup_t *cleanup; } ngx_pool_t;
 typedef struct { int error; void *log; } ngx_connection_t;
 typedef struct { u_char *data; size_t length; } ngx_file_t;
 typedef struct {
@@ -77,6 +84,7 @@ typedef struct {
     int response_body_seen, response_body_truncated, phase4_processed;
     int phase4_strict_abort, phase4_headers_checked, intervention_triggered;
     int intervention_late, intervention_failed, response_replaced, last_intervention_status;
+    ngx_http_request_t *r;
     void *modsec_transaction;
     u_char *phase4_file_scratch;
 } ngx_http_modsecurity_ctx_t;
@@ -84,14 +92,14 @@ typedef struct {
     unsigned phase4_mode;
     size_t phase4_body_limit;
 } ngx_http_modsecurity_conf_t;
-typedef struct ngx_http_request_s {
+struct ngx_http_request_s {
     int header_sent;
     struct ngx_http_request_s *main;
     ngx_pool_t *pool;
     ngx_connection_t *connection;
     ngx_http_modsecurity_ctx_t *ctx;
     ngx_http_modsecurity_conf_t *conf;
-} ngx_http_request_t;
+};
 #define NGX_OK 0
 #define NGX_ERROR (-1)
 #define NGX_AGAIN (-2)
@@ -102,10 +110,12 @@ typedef struct ngx_http_request_s {
 #define NGX_HTTP_MODSEC_PHASE4_MODE_STRICT 2
 #define NGX_HTTP_MODSECURITY_PHASE4_FILE_READ_CHUNK 32768U
 #define ngx_buf_in_memory(buffer) ((buffer)->memory)
-#define ngx_http_modsecurity_get_module_ctx(r) ((r)->ctx)
+#define ngx_http_get_module_ctx(r, module) ((r)->ctx)
 #define ngx_http_get_module_loc_conf(r, module) ((r)->conf)
 #define ngx_log_error(...) ((void)0)
 static int ngx_http_modsecurity_module;
+static ngx_http_modsecurity_ctx_t *ngx_http_modsecurity_get_module_ctx(ngx_http_request_t *r);
+static void ngx_http_modsecurity_cleanup(void *data) { (void)data; }
 static int allocation_calls, read_calls, append_calls, process_calls;
 static int fail_allocation, fail_read, short_read, fail_append, append_result = 1;
 static int engine_result = 1, native_result, native_late, native_failed;
@@ -161,9 +171,11 @@ static void ngx_http_modsecurity_pcre_malloc_done(ngx_pool_t *pool)
 static int ngx_http_modsecurity_process_intervention(void *transaction,
     ngx_http_request_t *r, int early)
 {
+    ngx_http_modsecurity_ctx_t *ctx = ngx_http_modsecurity_get_module_ctx(r);
     (void)transaction; (void)early;
-    r->ctx->intervention_late = native_late;
-    r->ctx->intervention_failed = native_failed;
+    if (ctx == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    ctx->intervention_late = native_late;
+    ctx->intervention_failed = native_failed;
     return native_result;
 }
 static ngx_int_t ngx_http_filter_finalize_request(ngx_http_request_t *r,
@@ -213,10 +225,33 @@ int main(int argc, char **argv)
     CHECK(argc == 2);
     memset(payload, 'A', sizeof(payload));
     request.pool = &pool; request.connection = &connection;
-    request.ctx = &ctx; request.conf = &conf; request.main = &request;
+    request.ctx = &ctx; request.conf = &conf; request.main = &request; ctx.r = &request;
     buffer.file = &file; buffer.in_file = 1; buffer.file_last = sizeof(payload);
 
-    if (strcmp(argv[1], "off-large") == 0) {
+    if (strcmp(argv[1], "request-ownership") == 0) {
+        ngx_http_modsecurity_ctx_t other_ctx = {0};
+        ngx_http_request_t subrequest = {0};
+        ngx_pool_cleanup_t owner_cleanup = {ngx_http_modsecurity_cleanup, &ctx, NULL};
+        ngx_pool_cleanup_t other_cleanup = {ngx_http_modsecurity_cleanup, &other_ctx, &owner_cleanup};
+        other_ctx.r = &subrequest;
+        subrequest.pool = &pool; subrequest.main = &request;
+        pool.cleanup = &other_cleanup;
+        CHECK(ngx_http_modsecurity_get_module_ctx(&request) == &ctx);
+        request.ctx = NULL; /* Same-request internal redirect clears module context. */
+        CHECK(ngx_http_modsecurity_get_module_ctx(&request) == &ctx);
+        CHECK(ngx_http_modsecurity_get_module_ctx(&subrequest) == &other_ctx);
+        subrequest.ctx = &ctx; /* Reject a foreign direct context too. */
+        CHECK(ngx_http_modsecurity_get_module_ctx(&subrequest) == &other_ctx);
+        pool.cleanup = &owner_cleanup; /* Auth subrequest has no own transaction. */
+        CHECK(ngx_http_modsecurity_get_module_ctx(&subrequest) == NULL);
+        subrequest.ctx = NULL; subrequest.connection = &connection;
+        final.last_in_chain = 1;
+        CHECK(ngx_http_modsecurity_body_filter(&subrequest, &tail) == NGX_OK);
+        CHECK(process_calls == 0 && !ctx.phase4_processed && forward_calls == 1);
+        final.last_in_chain = 0; final.last_buf = 1;
+        CHECK(ngx_http_modsecurity_body_filter(&request, &tail) == NGX_OK);
+        CHECK(process_calls == 1 && ctx.phase4_processed && forward_calls == 2);
+    } else if (strcmp(argv[1], "off-large") == 0) {
         conf.phase4_mode = NGX_HTTP_MODSEC_PHASE4_MODE_OFF;
         CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
             1048577U, &allowed) == NGX_OK);
@@ -450,7 +485,7 @@ int main(int argc, char **argv)
 """
 
 
-def unit_program(body: str) -> str:
+def unit_program(body: str, module: str) -> str:
     functions = (
         "response_body_failure", "plan_limited_response_body",
         "append_response_body_chunk", "append_limited_response_body",
@@ -468,7 +503,10 @@ def unit_program(body: str) -> str:
     production += "\nngx_int_t\n" + function_definition(
         body, "ngx_http_modsecurity_body_filter"
     )
-    return PREAMBLE + production + CASES
+    context_lookup = "\nstatic ngx_http_modsecurity_ctx_t *\n" + function_definition(
+        module, "ngx_http_modsecurity_get_module_ctx"
+    ) + "\n"
+    return PREAMBLE + context_lookup + production + CASES
 
 
 class Phase4RuntimeTests(unittest.TestCase):
@@ -481,7 +519,7 @@ class Phase4RuntimeTests(unittest.TestCase):
         cls.addClassCleanup(directory.cleanup)
         source = Path(directory.name) / "phase4.c"
         cls.binary = Path(directory.name) / ("phase4.exe" if os.name == "nt" else "phase4")
-        source.write_text(unit_program(BODY.read_text(encoding="utf-8")), encoding="utf-8")
+        source.write_text(unit_program(BODY.read_text(encoding="utf-8"), MODULE.read_text(encoding="utf-8")), encoding="utf-8")
         build = subprocess.run(
             [*compiler, "-std=c17", "-Wall", "-Wextra", "-Werror",
              str(source), "-o", str(cls.binary)],
@@ -505,7 +543,7 @@ def case_test(name: str):
 
 
 for case in (
-    "off-large", "off-multiple", "budget-boundary", "oversized-first",
+    "request-ownership", "off-large", "off-multiple", "budget-boundary", "oversized-first",
     "overflow", "invalid-accounting", "null-empty-mode", "file-chunks",
     "mixed-once", "file-limit", "file-invalid", "allocation-failure",
     "short-read", "read-error", "append-error", "append-zero", "final-once",

@@ -287,6 +287,7 @@ ngx_http_modsecurity_create_ctx(ngx_http_request_t *r)
         dd("failed to allocate memory for the context.");
         return NULL;
     }
+    ctx->r = r;
 
     mmcf = ngx_http_get_module_main_conf(r, ngx_http_modsecurity_module);
     mcf = ngx_http_get_module_loc_conf(r, ngx_http_modsecurity_module);
@@ -330,22 +331,25 @@ ngx_inline ngx_http_modsecurity_ctx_t *
 ngx_http_modsecurity_get_module_ctx(ngx_http_request_t *r)
 {
     ngx_http_modsecurity_ctx_t *ctx;
+    ngx_http_modsecurity_ctx_t *candidate;
+    ngx_pool_cleanup_t *cln;
+
     ctx = ngx_http_get_module_ctx(r, ngx_http_modsecurity_module);
-    if (ctx == NULL) {
-        /*
-         * refer <nginx>/src/http/modules/ngx_http_realip_module.c
-         * if module context was reset, the original address
-         * can still be found in the cleanup handler
-         */
-        ngx_pool_cleanup_t *cln;
-        for (cln = r->pool->cleanup; cln; cln = cln->next) {
-            if (cln->handler == ngx_http_modsecurity_cleanup) {
-                ctx = cln->data;
-                break;
-            }
+    if (ctx != NULL && ctx->r == r) {
+        return ctx;
+    }
+    /* Internal redirects reset module contexts but retain the same request.
+     * Subrequests share its pool, so cleanup recovery must match the owner. */
+    for (cln = r->pool->cleanup; cln; cln = cln->next) {
+        if (cln->handler != ngx_http_modsecurity_cleanup) {
+            continue;
+        }
+        candidate = cln->data;
+        if (candidate != NULL && candidate->r == r) {
+            return candidate;
         }
     }
-    return ctx;
+    return NULL;
 }
 
 char *
