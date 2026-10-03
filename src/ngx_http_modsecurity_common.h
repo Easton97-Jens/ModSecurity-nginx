@@ -112,7 +112,6 @@ typedef struct {
     unsigned response_body_truncated:1;
     unsigned intervention_late:1;
     unsigned intervention_failed:1;
-    unsigned intervention_failed:1;
     unsigned response_replaced:1;
     unsigned intervention_redirect_location_installed:1;
     size_t response_body_bytes_seen;
