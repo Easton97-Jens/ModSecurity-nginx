@@ -1,38 +1,38 @@
 #!/usr/bin/perl
 use warnings; use strict;
-use Test::More tests => 1;
+use Test::More;
 BEGIN { use FindBin; chdir($FindBin::Bin); }
 use lib 'lib';
 use Test::Nginx;
 
-my $t = Test::Nginx->new()->has(qw/http/);
-$t->write_file('phase4-invalid.conf', "text/*\n");
-mkdir($t->testdir() . '/logs') unless -d $t->testdir() . '/logs';
-$t->write_file('logs/error.log', '');
+my $t = Test::Nginx->new()->has(qw/http/)->plan(3);
+# Test::Nginx always reads this file in its two cleanup assertions, even
+# when nginx -t exits during configuration parsing before opening its log.
+$t->write_file('error.log', '');
+my $binary = $ENV{TEST_NGINX_BINARY} || ($t->testdir() . '/../nginx');
 
-$t->write_file_expand('nginx.conf', <<'EOF');
+for my $case (
+    ['modsecurity_phase4_mode minimal;', qr/invalid value.*minimal|invalid.*phase4.*mode/, 'removed minimal mode is rejected'],
+    ['modsecurity_phase4_content_types_file removed.conf;', qr/unknown directive.*modsecurity_phase4_content_types_file/, 'removed connector MIME directive is rejected'],
+    ['modsecurity_phase4_body_limit 0;', qr/(?:must be|invalid|greater than).*0|invalid.*body.*limit|body.*limit.*(?:positive|zero)/, 'zero connector body limit is rejected'],
+) {
+    my ($directive, $expected, $label) = @$case;
+    $t->write_file_expand('nginx.conf', <<"EOF");
 %%TEST_GLOBALS%%
-
 events {}
-
 http {
     %%TEST_GLOBALS_HTTP%%
-
     server {
         listen 127.0.0.1:19849;
-        server_name localhost;
         location / {
             modsecurity on;
-            modsecurity_phase4_content_types_file %%TESTDIR%%/phase4-invalid.conf;
-            return 200 "ok\n";
+            $directive
+            return 200 "ok\\n";
         }
     }
 }
 EOF
-
-my $cmd = $ENV{TEST_NGINX_BINARY} || ($t->testdir() . '/../nginx');
-$cmd .= " -p " . $t->testdir() . "/ -c nginx.conf -t 2>&1";
-my $out = `$cmd`;
-
-like($out, qr/invalid content-type entry in modsecurity_phase4_content_types_file/,
-    'error points to invalid content-type entry');
+    my $prefix = $t->testdir();
+    my $out = `"$binary" -p "$prefix/" -c nginx.conf -e error.log -t 2>&1`;
+    like($out, $expected, $label);
+}

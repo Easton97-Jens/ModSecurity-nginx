@@ -8,3 +8,47 @@ patch" on the project's README file.
 
 For more about nginx tests, check their repository:
 http://hg.nginx.org/nginx-tests/
+
+## Standalone Phase4 helper regressions
+
+Run from the repository root with Python 3 and GCC or Clang:
+
+```sh
+CC=gcc python3 tests/test_phase4_runtime.py -v
+CC=clang python3 tests/test_phase4_runtime.py -v
+```
+
+The suite compiles the production body-filter functions and request-context
+lookup with small NGINX and libModSecurity doubles. It checks mode-aware byte
+limits, overflow, memory/file buffers, bounded file reads and allocation/read
+errors, finalization at EOS, native failures, late interventions, downstream
+`NGX_AGAIN`, request ownership, and internal redirect recovery. It needs no
+Common connector library. These are helper behavior tests; they do not replace
+the native HTTP integration tests.
+
+## Native Phase4 integration tests
+
+Copy `tests/*.t` and `tests/*.pl` into an nginx-tests checkout after building
+NGINX with this connector and libModSecurity. From that checkout, run:
+
+```sh
+TEST_NGINX_BINARY=/absolute/path/to/nginx prove modsecurity-phase4-*.t
+TEST_NGINX_BINARY=/absolute/path/to/nginx prove modsecurity*.t
+```
+
+The Phase4 suites cover `off` (the default), `safe`, and `strict`, JSON event
+logging, engine-owned `SecResponseBodyMimeType` selection, complete response
+delivery above the optional connector budget in `off`, and budget rejection
+in `safe`/`strict`. They also reject the removed `minimal` mode and connector
+MIME directive. Late deny/redirect assertions check transport interruption,
+because headers have already been committed; they do not promise a clean 403.
+
+A separate GitHub workflow job runs the standalone suite immediately with
+both Linux compilers, independently of the libModSecurity build. The native
+Perl suites run in the Linux and Windows build jobs.
+
+`modsecurity-phase4-subrequest.t` checks that a disabled, header-only
+`auth_request` response cannot consume the main transaction's response headers
+or MIME selection. The main response must still run its Phase3 header rule and
+Phase4 body rule. Direct subrequest EOS ownership is exercised separately by
+the compiled helper suite; the auth fixture does not claim to emit a body EOS.

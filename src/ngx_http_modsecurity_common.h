@@ -71,7 +71,8 @@
 #define MODSECURITY_NGINX_WHOAMI "ModSecurity-nginx v" \
     MODSECURITY_NGINX_VERSION
 
-#define NGX_HTTP_MODSEC_PHASE4_MODE_MINIMAL 0
+#define NGX_HTTP_MODSEC_PHASE4_MODE_OFF 0
+#define NGX_HTTP_MODSEC_PHASE4_BODY_LIMIT_DEFAULT 1048576U
 #define NGX_HTTP_MODSEC_PHASE4_MODE_SAFE 1
 #define NGX_HTTP_MODSEC_PHASE4_MODE_STRICT 2
 
@@ -105,6 +106,17 @@ typedef struct {
     unsigned intervention_triggered:1;
     unsigned request_body_processed:1;
     unsigned phase4_headers_checked:1;
+    unsigned phase4_processed:1;
+    unsigned phase4_strict_abort:1;
+    unsigned response_body_seen:1;
+    unsigned response_body_truncated:1;
+    unsigned intervention_late:1;
+    unsigned intervention_failed:1;
+    unsigned response_replaced:1;
+    unsigned intervention_redirect_location_installed:1;
+    size_t response_body_bytes_seen;
+    size_t response_body_bytes_inspected;
+    u_char *phase4_file_scratch;
     ngx_str_t last_intervention_log;
     ngx_int_t last_intervention_status;
 } ngx_http_modsecurity_ctx_t;
@@ -132,8 +144,7 @@ typedef struct {
 
     ngx_http_complex_value_t  *transaction_id;
     ngx_uint_t                 phase4_mode;
-    ngx_array_t               *phase4_content_types;
-    ngx_str_t                  phase4_content_types_file;
+    size_t                     phase4_body_limit;
     ngx_open_file_t           *phase4_log_file;
     ngx_str_t                  phase4_log_path;
 } ngx_http_modsecurity_conf_t;
