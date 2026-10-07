@@ -58,15 +58,14 @@ ngx_http_modsecurity_response_body_failure(ngx_http_request_t *r,
         NGX_HTTP_INTERNAL_SERVER_ERROR);
 }
 
-/* This is an inspection budget. SIZE_MAX in off is an accounting ceiling,
- * never an allocation size; native engine and host limits remain active. */
+/* libModSecurity owns response inspection limits in every Phase-4 mode.
+ * Keep checked accounting without imposing the legacy connector budget;
+ * independent host, file-buffer and allocation limits remain active. */
 static ngx_int_t
 ngx_http_modsecurity_plan_limited_response_body(
     ngx_http_modsecurity_ctx_t *ctx, ngx_http_modsecurity_conf_t *mcf,
     size_t len, size_t *allowed)
 {
-    size_t limit;
-
     if (allowed == NULL) {
         return NGX_ERROR;
     }
@@ -78,17 +77,12 @@ ngx_http_modsecurity_plan_limited_response_body(
         return NGX_OK;
     }
     ctx->response_body_seen = 1;
-    if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_OFF) {
-        limit = SIZE_MAX;
-    } else if (mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_SAFE ||
-               mcf->phase4_mode == NGX_HTTP_MODSEC_PHASE4_MODE_STRICT) {
-        limit = mcf->phase4_body_limit;
-    } else {
+    if (mcf->phase4_mode != NGX_HTTP_MODSEC_PHASE4_MODE_OFF &&
+        mcf->phase4_mode != NGX_HTTP_MODSEC_PHASE4_MODE_SAFE &&
+        mcf->phase4_mode != NGX_HTTP_MODSEC_PHASE4_MODE_STRICT) {
         return NGX_ERROR;
     }
-    if (limit == 0U ||
-        ctx->response_body_bytes_inspected > ctx->response_body_bytes_seen ||
-        ctx->response_body_bytes_inspected > limit) {
+    if (ctx->response_body_bytes_inspected > ctx->response_body_bytes_seen) {
         ctx->response_body_truncated = 1;
         return NGX_ERROR;
     }
@@ -98,10 +92,6 @@ ngx_http_modsecurity_plan_limited_response_body(
         return NGX_ERROR;
     }
     ctx->response_body_bytes_seen += len;
-    if (ctx->response_body_bytes_seen > limit) {
-        ctx->response_body_truncated = 1;
-        return NGX_ERROR;
-    }
     *allowed = len;
     return NGX_OK;
 }

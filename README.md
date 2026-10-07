@@ -190,7 +190,7 @@ are sent. Before headers are sent, both modes can apply the intervention's HTTP
 status. Neither mode guarantees a clean 403 after headers have been sent.
 
 `off` uses the native intervention path and disables the connector's additional
-phase 4 policy and body budget. It does not disable ModSecurity response-body
+phase 4 policy. It does not disable ModSecurity response-body
 inspection; late native interventions can still fail the response. Configure
 inspection with `SecResponseBodyAccess`, `SecResponseBodyMimeType`, and
 `SecResponseBodyMimeTypesClear` in ModSecurity rules.
@@ -203,12 +203,14 @@ modsecurity_phase4_body_limit
 
 **default:** *1m (1 MiB)*
 
-Sets a positive cumulative response-body budget for `safe` and `strict`, in
-bytes or nginx size notation such as `256k` or `2m`. The connector counts bytes
-seen, including file-backed buffers, and rejects a chunk that would exceed the
-budget before forwarding that chunk. This is independent of the engine's
-response-body limit and does not introduce global response buffering.
-`off` ignores this budget but retains overflow checks.
+Deprecated compatibility setting. Positive values in bytes or nginx size
+notation such as `256k` or `2m` remain accepted and inherited; zero remains
+invalid. The historical default remains `1m`, but the value is ignored in
+`off`, `safe`, and `strict` and does not impose a response-inspection limit.
+
+Configure the engine's inspection policy with `SecResponseBodyLimit` and
+`SecResponseBodyLimitAction`. The connector retains checked byte accounting,
+overflow guards, and bounded file reads, without global response buffering.
 
 modsecurity_phase4_log
 ----------------------
@@ -220,15 +222,20 @@ Sets the file used for phase 4 JSON event logging.
 
 ### Phase 4 migration
 
-This branch adopts the phase 4 behavior from
+The initial phase 4 migration adopted behavior from
 [ModSecurity-conector at b0f3bdab429717b5b0311c30c5b4d1153c672ac0](https://github.com/Easton97-Jens/ModSecurity-conector/tree/b0f3bdab429717b5b0311c30c5b4d1153c672ac0/connectors/nginx/src),
 adapted for this standalone nginx module. It does not require that repository's
-multi-connector runtime.
+multi-connector runtime. Response-inspection limit ownership now follows
+[ModSecurity-conector at 820b6975495bdf0f90aca67eee86e27a3b7d329b](https://github.com/Easton97-Jens/ModSecurity-conector/blob/820b6975495bdf0f90aca67eee86e27a3b7d329b/docs/phase4-mode-budget.md):
+libModSecurity owns the inspection limits in every valid phase 4 mode.
 
-This changes configuration compatibility: `minimal` is rejected, the default
-mode changes from `safe` to `off`, and
+The earlier migration changed configuration compatibility: `minimal` is rejected,
+the default changed from `safe` to `off`, and
 `modsecurity_phase4_content_types_file` is removed. Set `safe` or `strict`
 explicitly when migrating, and move MIME selection into ModSecurity rules.
+The latest limit-ownership update retains those modes and their late policies.
+Existing `modsecurity_phase4_body_limit` values no longer limit inspection;
+migrate that policy to `SecResponseBodyLimit` and `SecResponseBodyLimitAction`.
 See [English](docs/phase4-handling.en.md) or
 [Deutsch](docs/phase4-handling.de.md) for the behavior, limits, logging schema,
 and examples. The documentation describes the source implementation; test

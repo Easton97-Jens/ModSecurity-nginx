@@ -528,6 +528,7 @@ ngx_conf_set_phase4_mode(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     return NGX_CONF_OK;
 }
 
+/* Keep legacy configurations parseable; use SecResponseBodyLimit in rules. */
 static char *
 ngx_conf_set_phase4_body_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {

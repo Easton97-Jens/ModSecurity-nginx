@@ -144,6 +144,7 @@ typedef struct {
 
     ngx_http_complex_value_t  *transaction_id;
     ngx_uint_t                 phase4_mode;
+    /* Deprecated compatibility value; libModSecurity owns inspection limits. */
     size_t                     phase4_body_limit;
     ngx_open_file_t           *phase4_log_file;
     ngx_str_t                  phase4_log_path;

@@ -9,8 +9,10 @@ HTTP-Status nicht zuverlässig ersetzen.
 
 Dieser Branch übernimmt die relevante nginx-Implementierung aus
 [Easton97-Jens/ModSecurity-conector, Commit b0f3bdab429717b5b0311c30c5b4d1153c672ac0](https://github.com/Easton97-Jens/ModSecurity-conector/tree/b0f3bdab429717b5b0311c30c5b4d1153c672ac0/connectors/nginx/src).
-Sie wird an dieses eigenständige Modul angepasst; das Phase-4-JSON-Lines-Schema
-dieses Branches bleibt erhalten. Die Multi-Connector-Laufzeit und
+Die Aktualisierung der Zuständigkeit für Response-Limits folgt
+[Commit 820b6975495bdf0f90aca67eee86e27a3b7d329b](https://github.com/Easton97-Jens/ModSecurity-conector/blob/820b6975495bdf0f90aca67eee86e27a3b7d329b/docs/phase4-mode-budget.de.md).
+Diese Änderungen werden an dieses eigenständige Modul angepasst; dessen
+Phase-4-JSON-Lines-Schema bleibt erhalten. Die Multi-Connector-Laufzeit und
 Laufzeitnachweise des Quellrepositories werden nicht übernommen.
 
 Dieses Dokument beschreibt das Verhalten im Quellcode. Es behauptet nicht,
@@ -25,27 +27,30 @@ Alle drei Connector-Direktiven gelten in `http`-, `server`- und
 | Direktive | Werte | Standard |
 | --- | --- | --- |
 | `modsecurity_phase4_mode` | `off`, `safe`, `strict` | `off` |
-| `modsecurity_phase4_body_limit` | Positive Byte-Anzahl oder nginx-Größe, z. B. `256k`, `2m` | `1m` (1 MiB) |
+| `modsecurity_phase4_body_limit` | Veralteter, ignorierter Kompatibilitätswert; positive Bytes oder nginx-Größe, z. B. `256k`, `2m` | `1m` (1 MiB), ignoriert |
 | `modsecurity_phase4_log` | Dateipfad für Phase-4-JSON-Lines-Ereignisse | Kein dediziertes Log |
 
-Bei der Migration der bisherigen `master-phase4`-Konfiguration sind diese
-Änderungen erforderlich:
+Bei der Migration älterer Phase-4-Konfigurationen gilt:
 
 - `minimal` ist nicht mehr gültig und kein Alias für `off`.
-- Der Standardmodus wechselt von `safe` auf `off`. Für die zusätzliche
-  Connector-Behandlung muss `safe` oder `strict` explizit gesetzt werden.
+- Der Standard ist `off`; ältere Konfigurationen konnten sich auf `safe`
+  verlassen. Für die zusätzliche Connector-Behandlung muss `safe` oder
+  `strict` explizit gesetzt werden.
 - `modsecurity_phase4_content_types_file` entfällt und verursacht einen
   nginx-Konfigurationsfehler. Die MIME-Auswahl gehört jetzt in ModSecurity-Regeln.
-- Das positive Connector-Body-Budget ist neu. Bei `safe` oder `strict` muss
-  ein passender Wert für die Antworten gewählt werden; null ist ungültig.
+- `modsecurity_phase4_body_limit` ist jetzt veraltet und wird in allen gültigen
+  Modi ignoriert. Parser für positive Werte, Vererbung und historischer
+  Standardwert von 1 MiB bleiben kompatibel; null ist weiterhin ungültig.
+  Inspection-Limits auf `SecResponseBodyLimit` und `SecResponseBodyLimitAction`
+  umstellen.
 
 Die migrierte Konfiguration vor dem nginx-Reload mit `nginx -t` in der
 Zielumgebung prüfen.
 
 ## 3) Modusverhalten und Header-Zeitpunkt
 
-`off` deaktiviert die zusätzliche Phase-4-Interventionsbehandlung und das
-Body-Budget des Connectors. Es **deaktiviert weder ModSecurity** noch die
+`off` deaktiviert die zusätzliche Phase-4-Interventionsbehandlung des Connectors.
+Es **deaktiviert weder ModSecurity** noch die
 Response-Body-Prüfung oder Phase-4-Regeln. Die native Interventionsbehandlung
 bleibt aktiv. Tritt eine native Intervention nach dem Header-Versand auf,
 kann die Finalisierung einen Transportfehler verursachen; `off` garantiert
@@ -60,7 +65,8 @@ Für die zusätzliche Behandlung in `safe` und `strict` gilt:
 
 `safe` degradiert nur späte **Interventionen**. Fehler der Engine-API,
 ungültige Buffer, fehlgeschlagene Dateizugriffe, Speicherallokationsfehler,
-Zählerüberläufe und überschrittene Body-Budgets bleiben Fehler. Sie werden
+Zählerüberläufe und Fehler bei der finalen Verarbeitung bleiben Fehler.
+Sie werden
 nicht in erfolgreiche Weiterleitung umgewandelt.
 
 `strict` kann eine abgeschnittene Antwort oder einen Transportfehler beim
@@ -68,19 +74,35 @@ Client/Proxy auslösen. Nach dem Header-Versand garantiert es keinen sauberen
 403-, 401-, 301- oder 302-Status. Bereits weitergeleitete Body-Bytes lassen
 sich nicht zurückholen.
 
-## 4) Response-Body-Budget und Streaming
+## 4) Engine-Inspection-Limits und Streaming
 
-`modsecurity_phase4_body_limit` ist in `safe` und `strict` ein
-Connector-Budget für die kumulativ gesehenen Response-Bytes, einschließlich
-dateibasierter Buffer. Es ist unabhängig von `SecResponseBodyLimit` der
-Engine und zählt nicht nur die Bytes, die die Engine zur Prüfung speichert.
+libModSecurity bestimmt das Byte-Limit der WAF-Response-Inspection über
+`SecResponseBodyLimit` und `SecResponseBodyLimitAction` in jedem Phase-4-Modus.
+Der Connector ergänzt keine kumulierte Inspection-Grenze für `safe`, `strict`
+oder `off` und weist eine Antwort nicht allein deshalb ab, weil sie
+`modsecurity_phase4_body_limit` überschreitet.
 
-Eine Antwort darf das Budget exakt erreichen. Ein Chunk, der es überschreiten
-würde, wird **vor seiner Weiterleitung** abgewiesen. Frühere Chunks können
-bereits beim Client angekommen sein; ein ersetzender HTTP-Fehlerstatus ist
-daher nicht garantiert. In `off` wird das konfigurierte Connector-Budget
-ignoriert, die kumulative Zählung weist Überläufe über `SIZE_MAX` aber weiterhin
-ab.
+Beispielsweise diese Engine-Policy in den ModSecurity-Regeln konfigurieren:
+
+```apache
+SecResponseBodyLimit 1048576
+SecResponseBodyLimitAction ProcessPartial
+```
+
+1 MiB ist hier ein expliziter Beispielwert, kein neuer Engine-Standard.
+`ProcessPartial` wählt die Prüfung des Anteils innerhalb des Engine-Limits;
+`Reject` ist die alternative Engine-Aktion, wenn Abweisung erforderlich ist.
+Der Modus überschreibt diese Engine-Policy nicht. Daraus entstehende späte
+Interventionen folgen weiterhin dem ausgewählten Connector-Modus.
+
+Die veraltete Connector-Einstellung bleibt parsebar und wird vererbt, ihr Wert
+wird aber in keinem gültigen Modus durchgesetzt. Erfolgreiches Laden der
+Konfiguration belegt daher nicht die alte Connector-Inspection-Grenze.
+Diese Policy auf die oben genannten Engine-Einstellungen umstellen.
+
+Die geprüfte kumulierte Bytezählung weist Überläufe über `SIZE_MAX` weiterhin
+in allen Modi ab. Echte Verarbeitungs- und Datei-Read-Fehler bleiben Fehler;
+nichtfatale Engine-Aufnahme mit `ProcessPartial` ist kein Connector-Fehler.
 
 Der Connector puffert Antworten nicht global und ordnet nginx-Body-Ketten nicht
 um. Speicherbuffer werden direkt geprüft. Rein dateibasierte Buffer werden
@@ -116,7 +138,8 @@ Das Zurücksetzen erfolgt getrennt, weil die
 MIME-Werte entfernen kann, die im selben Regel-Ladevorgang hinzugefügt werden.
 
 Das eigenständige [Engine-MIME-Beispiel](examples/phase4-engine-mime.conf)
-enthält MIME-Ergänzungen und aktiviert die Response-Body-Prüfung. Es ist eine
+enthält MIME-Ergänzungen, Response-Body-Prüfung und eine explizite
+Engine-Limit-Policy. Es ist eine
 ModSecurity-Regeldatei, kein nginx-Include. Um die MIME-Liste der Engine durch
 diese Datei zu ersetzen, zuerst das Zurücksetzen und dann die Datei zusätzlich
 zu den anderen Regeln laden:
@@ -129,8 +152,8 @@ modsecurity_rules_file /etc/modsecurity/phase4-engine-mime.conf;
 Die vollständigen nginx-Beispiele unten konfigurieren die MIME-Auswahl inline
 mit derselben Reihenfolge getrennter Ladevorgänge.
 
-Die Engine-Auswahl deaktiviert das unabhängige Connector-Body-Budget in
-`safe` oder `strict` nicht.
+MIME-Auswahl und Inspection-Limits der Engine gelten in jedem Phase-4-Modus;
+es gibt kein zusätzliches Connector-Inspection-Budget.
 
 ## 6) Logging-Format und Sicherheitsgrenze
 
@@ -154,14 +177,16 @@ vollständige Erfassung aller Engine-, Buffer- oder I/O-Fehler.
 
 ## 7) Konfigurationsbeispiele und Verifikation
 
-- [off](examples/phase4-off.conf): native Interventionsbehandlung bei
-  eingeschalteter Engine-Prüfung.
-- [safe](examples/phase4-safe.conf): explizite späte `log_only`-Behandlung und
-  1 MiB Connector-Budget.
-- [strict](examples/phase4-strict.conf): später Verbindungsabbruch und
-  1 MiB Connector-Budget.
+- [off](examples/phase4-off.conf): native Interventionsbehandlung mit expliziter
+  Engine-Inspection-Policy.
+- [safe](examples/phase4-safe.conf): explizite späte `log_only`-Behandlung.
+- [strict](examples/phase4-strict.conf): später Verbindungsabbruch.
+
 - [Engine-MIME-Auswahl](examples/phase4-engine-mime.conf):
   ModSecurity-Konfiguration für den Response-Body.
+
+Alle drei Beispiele konfigurieren dasselbe Engine-Limit von 1 MiB mit
+`ProcessPartial`; diese Limit-Policy ist vom Connector-Modus unabhängig.
 
 Die nginx-Beispiele verwenden `location /` und einen Beispiel-Upstream unter
 `127.0.0.1:8081`. Listen-Adresse, Upstream, Logpfad und Regeln an die
@@ -170,6 +195,7 @@ Zielumgebung anpassen. Die Regel mit `sensitive-marker` dient zur Illustration.
 Repository-Testendpunkte wie `/phase4` sind Testfixtures, keine erforderlichen
 Produktionspfade. Laufzeitprüfungen sollten späte Deny-/Redirect-Interventionen,
 HTTP/1.1 und HTTP/2, dateibasierte Antworten, Subrequests, wiederholte
-Finalisierung, Budgetgrenzen und Fehlerpfade abdecken. Ergebnisse aus einem
+Finalisierung, Engine-Limit-Grenzen, Antworten oberhalb der ignorierten alten
+Einstellung und Fehlerpfade abdecken. Ergebnisse aus einem
 anderen Repository oder Build belegen diese Eigenschaften des eingesetzten
 Moduls nicht.

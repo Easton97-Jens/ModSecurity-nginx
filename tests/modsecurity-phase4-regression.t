@@ -38,13 +38,17 @@ for my $mode (qw/off safe strict/) {
     $t->write_file('/' . $mode, $big);
 }
 $t->run();
-$t->plan(6);
+$t->plan(8);
 
-my $resp = http_get('/off');
-like($resp, qr/HTTP\/1\.1 200 OK/, 'off ignores optional connector body budget');
-my ($headers, $body) = split /\x0d\x0a\x0d\x0a/, $resp, 2;
-is($body, $big, 'off forwards the complete large response without truncation');
-like($t->read_file('error.log'), qr/phase4-tail-seen/, 'off still processes the response body through the engine');
-unlike(http_get('/safe'), qr/TAIL/, 'safe rejects a response exceeding the connector budget');
-unlike(http_get('/strict'), qr/TAIL/, 'strict rejects a response exceeding the connector budget');
-unlike($t->read_file('phase4-regression.log'), qr/A{100,}|TAIL/, 'response bytes are absent from event logs');
+for my $mode (qw/off safe strict/) {
+    my $resp = http_get('/' . $mode);
+    like($resp, qr/HTTP\/1\.1 200 OK/, "$mode ignores the legacy connector limit");
+    my ($headers, $body) = split /\x0d\x0a\x0d\x0a/, $resp, 2;
+    is($body, $big, "$mode forwards the complete large response");
+}
+$t->stop();
+my $error_log = $t->read_file('error.log');
+is(scalar(() = $error_log =~ /phase4-tail-seen/g), 3,
+    'the engine inspects the tail beyond the legacy limit in every mode');
+unlike($t->read_file('phase4-regression.log'), qr/A{100,}|TAIL/,
+    'response bytes are absent from event logs');

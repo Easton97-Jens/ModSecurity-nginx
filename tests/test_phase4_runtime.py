@@ -251,25 +251,31 @@ int main(int argc, char **argv)
         final.last_in_chain = 0; final.last_buf = 1;
         CHECK(ngx_http_modsecurity_body_filter(&request, &tail) == NGX_OK);
         CHECK(process_calls == 1 && ctx.phase4_processed && forward_calls == 2);
-    } else if (strcmp(argv[1], "off-large") == 0) {
-        conf.phase4_mode = NGX_HTTP_MODSEC_PHASE4_MODE_OFF;
-        CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
-            1048577U, &allowed) == NGX_OK);
-        CHECK(allowed == 1048577U && ctx.response_body_bytes_seen == allowed);
-        CHECK(ctx.response_body_seen && !ctx.response_body_truncated);
-        CHECK(ctx.response_body_bytes_inspected == 0U);
-    } else if (strcmp(argv[1], "off-multiple") == 0) {
-        conf.phase4_mode = NGX_HTTP_MODSEC_PHASE4_MODE_OFF;
-        for (i = 0; i < 3; ++i) {
+    } else if (strcmp(argv[1], "all-modes-large") == 0) {
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
             CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
-                1048576U, &allowed) == NGX_OK);
-            CHECK(allowed == 1048576U);
-            ctx.response_body_bytes_inspected += allowed;
+                1048577U, &allowed) == NGX_OK);
+            CHECK(allowed == 1048577U && ctx.response_body_bytes_seen == allowed);
+            CHECK(ctx.response_body_seen && !ctx.response_body_truncated);
+            CHECK(ctx.response_body_bytes_inspected == 0U);
         }
-        CHECK(ctx.response_body_bytes_seen == 3U * 1048576U);
-        CHECK(!ctx.response_body_truncated);
-    } else if (strcmp(argv[1], "budget-boundary") == 0) {
-        for (i = 1; i <= 2; ++i) {
+    } else if (strcmp(argv[1], "all-modes-multiple") == 0) {
+        size_t chunk;
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            for (chunk = 0; chunk < 3; ++chunk) {
+                CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
+                    1048576U, &allowed) == NGX_OK);
+                CHECK(allowed == 1048576U);
+                ctx.response_body_bytes_inspected += allowed;
+            }
+            CHECK(ctx.response_body_bytes_seen == 3U * 1048576U);
+            CHECK(ctx.response_body_bytes_inspected == ctx.response_body_bytes_seen);
+            CHECK(!ctx.response_body_truncated);
+        }
+    } else if (strcmp(argv[1], "legacy-boundary") == 0) {
+        for (i = 0; i <= 2; ++i) {
             memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
             CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
                 1048575U, &allowed) == NGX_OK);
@@ -278,34 +284,52 @@ int main(int argc, char **argv)
                 1U, &allowed) == NGX_OK);
             ctx.response_body_bytes_inspected += allowed;
             CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
-                1U, &allowed) == NGX_ERROR);
-            CHECK(allowed == 0U && ctx.response_body_truncated);
+                1U, &allowed) == NGX_OK);
+            ctx.response_body_bytes_inspected += allowed;
+            CHECK(allowed == 1U && !ctx.response_body_truncated);
             CHECK(ctx.response_body_bytes_seen == 1048577U);
-            CHECK(ctx.response_body_bytes_inspected == 1048576U);
+            CHECK(ctx.response_body_bytes_inspected == 1048577U);
         }
-    } else if (strcmp(argv[1], "oversized-first") == 0) {
-        for (i = 1; i <= 2; ++i) {
+    } else if (strcmp(argv[1], "memory-over-legacy-limit") == 0) {
+        conf.phase4_body_limit = 65536U;
+        buffer.in_file = 0; buffer.memory = 1;
+        buffer.pos = payload; buffer.last = payload + sizeof(payload);
+        for (i = 0; i <= 2; ++i) {
             memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
-            CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
-                1048577U, &allowed) == NGX_ERROR);
-            CHECK(allowed == 0U && ctx.response_body_truncated);
-            CHECK(ctx.response_body_bytes_inspected == 0U);
+            append_calls = 0; appended_bytes = 0;
+            CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+                &conf, &buffer) == NGX_OK);
+            CHECK(append_calls == 1 && appended_bytes == sizeof(payload));
+            CHECK(read_calls == 0 && allocation_calls == 0);
+            CHECK(ctx.response_body_bytes_seen == sizeof(payload));
+            CHECK(ctx.response_body_bytes_inspected == sizeof(payload));
+            CHECK(!ctx.response_body_truncated);
+            CHECK(memcmp(inspected, payload, sizeof(payload)) == 0);
+            CHECK(buffer.pos == payload && buffer.last == payload + sizeof(payload));
         }
     } else if (strcmp(argv[1], "overflow") == 0) {
-        conf.phase4_mode = NGX_HTTP_MODSEC_PHASE4_MODE_OFF;
-        ctx.response_body_bytes_seen = SIZE_MAX - 1U;
-        ctx.response_body_bytes_inspected = SIZE_MAX - 1U;
-        CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
-            2U, &allowed) == NGX_ERROR);
-        CHECK(allowed == 0U && ctx.response_body_truncated);
-        CHECK(ctx.response_body_bytes_seen == SIZE_MAX);
-        CHECK(ctx.response_body_bytes_inspected == SIZE_MAX - 1U);
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            ctx.response_body_bytes_seen = SIZE_MAX - 1U;
+            ctx.response_body_bytes_inspected = SIZE_MAX - 1U;
+            CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
+                2U, &allowed) == NGX_ERROR);
+            CHECK(allowed == 0U && ctx.response_body_truncated);
+            CHECK(ctx.response_body_bytes_seen == SIZE_MAX);
+            CHECK(ctx.response_body_bytes_inspected == SIZE_MAX - 1U);
+            CHECK(ngx_http_modsecurity_append_response_body_chunk(&ctx,
+                payload, 2U) == NGX_ERROR);
+            CHECK(append_calls == 0);
+        }
     } else if (strcmp(argv[1], "invalid-accounting") == 0) {
-        ctx.response_body_bytes_inspected = 1U;
-        CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
-            1U, &allowed) == NGX_ERROR);
-        CHECK(allowed == 0U && ctx.response_body_truncated);
-        CHECK(ctx.response_body_bytes_seen == 0U);
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            ctx.response_body_bytes_inspected = 1U;
+            CHECK(ngx_http_modsecurity_plan_limited_response_body(&ctx, &conf,
+                1U, &allowed) == NGX_ERROR);
+            CHECK(allowed == 0U && ctx.response_body_truncated);
+            CHECK(ctx.response_body_bytes_seen == 0U);
+        }
     } else if (strcmp(argv[1], "null-empty-mode") == 0) {
         CHECK(ngx_http_modsecurity_plan_limited_response_body(NULL, &conf,
             1U, &allowed) == NGX_ERROR && allowed == 0U);
@@ -330,19 +354,39 @@ int main(int argc, char **argv)
         CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
             &conf, &buffer) == NGX_OK);
         CHECK(allocation_calls == 1 && appended_bytes == sizeof(payload) + 1U);
-    } else if (strcmp(argv[1], "mixed-once") == 0) {
-        buffer.memory = 1; buffer.pos = payload; buffer.last = payload + 15;
-        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
-            &conf, &buffer) == NGX_OK);
-        CHECK(appended_bytes == 15U && append_calls == 1 && read_calls == 0);
-        CHECK(ctx.response_body_bytes_seen == 15U);
-        CHECK(buffer.pos == payload && buffer.last == payload + 15);
-    } else if (strcmp(argv[1], "file-limit") == 0) {
-        conf.phase4_body_limit = sizeof(payload) - 1U;
-        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
-            &conf, &buffer) == NGX_ERROR);
-        CHECK(read_calls == 0 && allocation_calls == 0 && append_calls == 0);
-        CHECK(ctx.response_body_truncated);
+    } else if (strcmp(argv[1], "mixed-over-legacy-limit") == 0) {
+        conf.phase4_body_limit = 65536U;
+        buffer.memory = 1; buffer.pos = payload; buffer.last = payload + sizeof(payload);
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            append_calls = 0; appended_bytes = 0;
+            CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+                &conf, &buffer) == NGX_OK);
+            CHECK(appended_bytes == sizeof(payload) && append_calls == 1);
+            CHECK(read_calls == 0 && allocation_calls == 0);
+            CHECK(ctx.response_body_bytes_seen == sizeof(payload));
+            CHECK(ctx.response_body_bytes_inspected == sizeof(payload));
+            CHECK(!ctx.response_body_truncated);
+            CHECK(memcmp(inspected, payload, sizeof(payload)) == 0);
+            CHECK(buffer.pos == payload && buffer.last == payload + sizeof(payload));
+            CHECK(buffer.file_pos == 0 && buffer.file_last == sizeof(payload));
+        }
+    } else if (strcmp(argv[1], "file-over-legacy-limit") == 0) {
+        conf.phase4_body_limit = 65536U;
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            read_calls = 0; append_calls = 0; allocation_calls = 0;
+            appended_bytes = 0; read_max = 0;
+            CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+                &conf, &buffer) == NGX_OK);
+            CHECK(read_calls == 3 && append_calls == 3 && read_max == 32768U);
+            CHECK(allocation_calls == 1 && appended_bytes == sizeof(payload));
+            CHECK(ctx.response_body_bytes_seen == sizeof(payload));
+            CHECK(ctx.response_body_bytes_inspected == sizeof(payload));
+            CHECK(!ctx.response_body_truncated);
+            CHECK(memcmp(inspected, payload, sizeof(payload)) == 0);
+            CHECK(buffer.file_pos == 0 && buffer.file_last == sizeof(payload));
+        }
     } else if (strcmp(argv[1], "file-invalid") == 0) {
         buffer.file_pos = -1;
         CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
@@ -353,6 +397,16 @@ int main(int argc, char **argv)
         buffer.file_pos = 0; buffer.file_last = 10; buffer.file = NULL;
         CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
             &conf, &buffer) == NGX_ERROR);
+        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+            &conf, NULL) == NGX_ERROR);
+        buffer.memory = 1; buffer.pos = NULL; buffer.last = payload + 10;
+        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+            &conf, &buffer) == NGX_ERROR);
+        buffer.pos = payload + 10; buffer.last = payload;
+        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+            &conf, &buffer) == NGX_ERROR);
+        CHECK(ngx_http_modsecurity_append_response_body_chunk(&ctx,
+            NULL, 1U) == NGX_ERROR);
         CHECK(read_calls == 0 && append_calls == 0);
     } else if (strcmp(argv[1], "allocation-failure") == 0) {
         fail_allocation = 1;
@@ -367,16 +421,25 @@ int main(int argc, char **argv)
         CHECK(read_calls == 1 && append_calls == 0 && appended_bytes == 0U);
     } else if (strcmp(argv[1], "append-error") == 0) {
         fail_append = 1;
-        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
-            &conf, &buffer) == NGX_ERROR);
-        CHECK(ctx.response_body_bytes_inspected == 0U);
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+                &conf, &buffer) == NGX_ERROR);
+            CHECK(ctx.response_body_bytes_inspected == 0U);
+        }
     } else if (strcmp(argv[1], "append-zero") == 0) {
         append_result = 0;
+        conf.phase4_body_limit = 1U;
         buffer.in_file = 0; buffer.memory = 1;
         buffer.pos = payload; buffer.last = payload + 10;
-        CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
-            &conf, &buffer) == NGX_OK);
-        CHECK(ctx.response_body_bytes_inspected == 10U && append_calls == 1);
+        for (i = 0; i <= 2; ++i) {
+            memset(&ctx, 0, sizeof(ctx)); conf.phase4_mode = (unsigned)i;
+            append_calls = 0; appended_bytes = 0;
+            CHECK(ngx_http_modsecurity_append_response_body_buffer(&request, &ctx,
+                &conf, &buffer) == NGX_OK);
+            CHECK(ctx.response_body_bytes_inspected == 10U && append_calls == 1);
+            CHECK(!ctx.response_body_truncated);
+        }
     } else if (strcmp(argv[1], "final-once") == 0) {
         CHECK(ngx_http_modsecurity_process_final_response_body(&request, &ctx, &conf) == NGX_OK);
         CHECK(ngx_http_modsecurity_process_final_response_body(&request, &ctx, &conf) == NGX_OK);
@@ -543,9 +606,9 @@ def case_test(name: str):
 
 
 for case in (
-    "request-ownership", "off-large", "off-multiple", "budget-boundary", "oversized-first",
+    "request-ownership", "all-modes-large", "all-modes-multiple", "legacy-boundary", "memory-over-legacy-limit",
     "overflow", "invalid-accounting", "null-empty-mode", "file-chunks",
-    "mixed-once", "file-limit", "file-invalid", "allocation-failure",
+    "mixed-over-legacy-limit", "file-over-legacy-limit", "file-invalid", "allocation-failure",
     "short-read", "read-error", "append-error", "append-zero", "final-once",
     "engine-error", "process-zero",
     "main-eos", "subrequest-eos", "chain-restored", "forward-again",

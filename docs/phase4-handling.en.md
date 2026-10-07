@@ -9,7 +9,9 @@ client.
 
 This branch adopts the relevant nginx implementation from
 [Easton97-Jens/ModSecurity-conector, commit b0f3bdab429717b5b0311c30c5b4d1153c672ac0](https://github.com/Easton97-Jens/ModSecurity-conector/tree/b0f3bdab429717b5b0311c30c5b4d1153c672ac0/connectors/nginx/src).
-It is adapted to this standalone module and preserves this branch's phase 4
+The response-limit ownership update follows
+[commit 820b6975495bdf0f90aca67eee86e27a3b7d329b](https://github.com/Easton97-Jens/ModSecurity-conector/blob/820b6975495bdf0f90aca67eee86e27a3b7d329b/docs/phase4-mode-budget.md).
+These changes are adapted to this standalone module and preserve its phase 4
 JSON-lines schema. The source repository's multi-connector runtime and run
 evidence are not imported.
 
@@ -24,27 +26,28 @@ All three connector directives below are valid in `http`, `server`, and
 | Directive | Values | Default |
 | --- | --- | --- |
 | `modsecurity_phase4_mode` | `off`, `safe`, `strict` | `off` |
-| `modsecurity_phase4_body_limit` | Positive byte count or nginx size, e.g. `256k`, `2m` | `1m` (1 MiB) |
+| `modsecurity_phase4_body_limit` | Deprecated, ignored compatibility value; positive bytes or nginx size, e.g. `256k`, `2m` | `1m` (1 MiB), ignored |
 | `modsecurity_phase4_log` | File path for phase 4 JSON-lines events | No dedicated log |
 
-Migration from the previous `master-phase4` configuration requires these
-changes:
+When migrating older phase 4 configurations, note:
 
 - `minimal` is no longer valid and is not an alias for `off`.
-- The default mode changes from `safe` to `off`. Set `safe` or `strict`
-  explicitly to enable the additional connector policy.
+- The default is `off`; older configurations may have relied on `safe`.
+  Set `safe` or `strict` explicitly to enable the additional connector policy.
 - `modsecurity_phase4_content_types_file` is removed and causes an nginx
   configuration error. Move MIME selection into ModSecurity rules.
-- The positive connector body budget is new. Choose a value suitable for your
-  responses when enabling `safe` or `strict`; zero is invalid.
+- `modsecurity_phase4_body_limit` is now deprecated and ignored in all valid
+  modes. Its positive-value parser, inheritance, and historical 1 MiB default
+  remain for compatibility; zero is still invalid. Move inspection limits into
+  `SecResponseBodyLimit` and `SecResponseBodyLimitAction`.
 
 Validate the migrated configuration with `nginx -t` in the deployment
 environment before reloading nginx.
 
 ## 3) Mode behavior and header timing
 
-`off` disables the connector's additional phase 4 intervention policy and body
-budget. It **does not disable ModSecurity**, response-body inspection, or phase
+`off` disables the connector's additional phase 4 intervention policy.
+It **does not disable ModSecurity**, response-body inspection, or phase
 4 rules. Native intervention handling remains active. If a native intervention
 occurs after headers have been committed, response finalization can fail the
 transport; `off` is not a promise to deliver every response.
@@ -57,25 +60,43 @@ For the additional policy in `safe` and `strict`:
 | Headers already sent | Log the intervention as `log_only` and continue | Log `connection_abort` and terminate the response |
 
 `safe` only downgrades late **interventions**. An engine API failure, invalid
-buffer, failed file read, allocation failure, counter overflow, or exceeded
-body budget remains a failure. It is not converted into successful forwarding.
+buffer, failed file read, allocation failure, counter overflow, or final
+processing failure remains a failure. It is not converted into successful
+forwarding.
 
 `strict` can produce a truncated response or a client/proxy transport error.
 It cannot guarantee a clean 403, 401, 301, or 302 after headers have been sent.
 Previously forwarded body bytes cannot be recalled.
 
-## 4) Response-body budget and streaming
+## 4) Engine inspection limits and streaming
 
-`modsecurity_phase4_body_limit` is a connector budget for the cumulative
-response bytes it sees in `safe` and `strict`, including file-backed buffers.
-It is separate from the engine's `SecResponseBodyLimit` and is not restricted
-to the bytes the engine retains for inspection.
+libModSecurity owns the WAF response-inspection byte limit through
+`SecResponseBodyLimit` and `SecResponseBodyLimitAction` in every phase 4 mode.
+The connector does not add a cumulative inspection ceiling for `safe`,
+`strict`, or `off`, and does not reject a response merely because it exceeds
+`modsecurity_phase4_body_limit`.
 
-A response may reach the budget exactly. A chunk that would cross it is
-rejected **before that chunk is forwarded**. Earlier chunks may already have
-reached the client, so this does not guarantee a replacement HTTP error
-status. In `off`, the configured connector budget is ignored, but cumulative
-accounting still rejects overflow beyond `SIZE_MAX`.
+For example, configure this engine policy in your ModSecurity rules:
+
+```apache
+SecResponseBodyLimit 1048576
+SecResponseBodyLimitAction ProcessPartial
+```
+
+The 1 MiB value is an explicit example setting, not a new engine default.
+`ProcessPartial` selects inspection of the portion within the engine limit;
+`Reject` is the alternative engine action when rejection is required. Mode
+selection does not override that engine policy. Any resulting late intervention
+still follows the selected connector mode.
+
+The deprecated connector setting remains parseable and inherited, but its
+value has no enforcement effect in any valid mode. A successful configuration
+load therefore does not establish the old connector inspection limit. Migrate
+that policy to the engine settings above.
+
+Checked cumulative byte accounting still rejects overflow beyond `SIZE_MAX`
+in all modes. Genuine processing and file-read failures remain failures;
+nonfatal engine `ProcessPartial` ingestion is not a connector failure.
 
 The connector does not globally buffer responses or reorder nginx body
 chains. Memory buffers are inspected directly. File-only buffers are read
@@ -109,7 +130,8 @@ The reset is separate because libModSecurity's
 can clear MIME values added in the same rule load.
 
 The standalone [engine MIME example](examples/phase4-engine-mime.conf) contains
-MIME additions and enables response-body access. It is a ModSecurity rules
+MIME additions, response-body access, and an explicit engine limit policy.
+It is a ModSecurity rules
 file, not an nginx include. To replace the engine's MIME list with this file,
 load the reset first, then the file, alongside your other rules:
 
@@ -121,8 +143,8 @@ modsecurity_rules_file /etc/modsecurity/phase4-engine-mime.conf;
 The complete nginx examples below configure MIME selection inline using the
 same separate-load sequence.
 
-Engine selection does not disable the independent connector body budget in
-`safe` or `strict`.
+Engine MIME selection and inspection limits apply in every phase 4 mode;
+there is no additional connector inspection budget.
 
 ## 6) Logging format and security boundary
 
@@ -145,14 +167,16 @@ all engine, buffer, or I/O errors.
 
 ## 7) Configuration examples and verification
 
-- [off](examples/phase4-off.conf): native intervention handling with engine
-  inspection enabled.
-- [safe](examples/phase4-safe.conf): explicit late `log_only` policy and a
-  1 MiB connector budget.
-- [strict](examples/phase4-strict.conf): late connection termination and a
-  1 MiB connector budget.
+- [off](examples/phase4-off.conf): native intervention handling with explicit
+  engine inspection policy.
+- [safe](examples/phase4-safe.conf): explicit late `log_only` policy.
+- [strict](examples/phase4-strict.conf): late connection termination.
+
 - [engine MIME selection](examples/phase4-engine-mime.conf): ModSecurity
   response-body configuration.
+
+All three examples configure the same 1 MiB engine limit with `ProcessPartial`;
+that limit policy is independent of the connector mode.
 
 The nginx examples use `location /` and an example upstream at
 `127.0.0.1:8081`. Adapt the listen address, upstream, log path, and rules to
@@ -161,5 +185,6 @@ your environment. The `sensitive-marker` rule is illustrative.
 Repository test endpoints such as `/phase4` are test fixtures, not required
 production paths. Runtime checks should cover late deny/redirect behavior,
 HTTP/1.1 and HTTP/2, file-backed responses, subrequests, repeated finalization,
-budget boundaries, and failure paths. Results from another repository or build
+engine-limit boundaries, responses above the ignored legacy setting, and
+failure paths. Results from another repository or build
 do not establish those behaviors for the deployed module.

@@ -14,16 +14,19 @@ http://hg.nginx.org/nginx-tests/
 Run from the repository root with Python 3 and GCC or Clang:
 
 ```sh
-CC=gcc python3 tests/test_phase4_runtime.py -v
-CC=clang python3 tests/test_phase4_runtime.py -v
+CC=gcc python3 -m unittest discover -s tests -p 'test_*runtime.py' -v
+CC=clang python3 -m unittest discover -s tests -p 'test_*runtime.py' -v
 ```
 
-The suite compiles the production body-filter functions and request-context
-lookup with small NGINX and libModSecurity doubles. It checks mode-aware byte
-limits, overflow, memory/file buffers, bounded file reads and allocation/read
+The suites compile the production body-filter functions, request-context
+lookup, and intervention helpers with small NGINX and libModSecurity doubles.
+They check forwarding above the deprecated connector limit in every mode,
+checked accounting, overflow, memory/file buffers, bounded file reads and allocation/read
 errors, finalization at EOS, native failures, late interventions, downstream
-`NGX_AGAIN`, request ownership, and internal redirect recovery. It needs no
-Common connector library. These are helper behavior tests; they do not replace
+`NGX_AGAIN`, request ownership, and internal redirect recovery. They need no
+Common connector library. The intervention cases run with sanity checks enabled
+and disabled and cover redirect ownership, status values, and cleanup. These
+are helper behavior tests; they do not replace
 the native HTTP integration tests.
 
 ## Native Phase4 integration tests
@@ -38,8 +41,9 @@ TEST_NGINX_BINARY=/absolute/path/to/nginx prove modsecurity*.t
 
 The Phase4 suites cover `off` (the default), `safe`, and `strict`, JSON event
 logging, engine-owned `SecResponseBodyMimeType` selection, complete response
-delivery above the optional connector budget in `off`, and budget rejection
-in `safe`/`strict`. They also reject the removed `minimal` mode and connector
+delivery above the deprecated connector limit in every mode, and engine-owned
+`SecResponseBodyLimit` behavior with `Reject` and `ProcessPartial`. They also
+reject the removed `minimal` mode and connector
 MIME directive. Late deny/redirect assertions check transport interruption,
 because headers have already been committed; they do not promise a clean 403.
 
