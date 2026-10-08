@@ -10,6 +10,22 @@ on:
 permissions: {}
 
 jobs:
+  phase4-unit-tests:
+    permissions:
+      contents: read
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: "/usr/bin/${{ matrix.compiler }}"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run standalone connector helper regressions
+        run: python3 -m unittest discover -s tests -p 'test_*runtime.py' -v
+
   build-linux:
     name: linux-${{ matrix.compiler }}-nginx-${{ matrix.nginx_version }}
     permissions:
@@ -34,6 +50,7 @@ jobs:
       - name: Get libModSecurity source
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           repository: owasp-modsecurity/ModSecurity
           path: ModSecurity
           submodules: recursive
@@ -47,6 +64,7 @@ jobs:
           sudo make install
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           path: ModSecurity-nginx
           fetch-depth: 1
       - name: Resolve latest Nginx version
@@ -57,6 +75,7 @@ jobs:
       - name: Get Nginx source
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: nginx/nginx
           ref: ${{ steps.nginx_ref.outputs.ref }}
           path: nginx
@@ -75,6 +94,7 @@ jobs:
       - name: Get Nginx tests
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: nginx/nginx-tests
           path: nginx/test
           fetch-depth: 0
@@ -290,6 +310,7 @@ jobs:
       - name: Get ModSecurity-nginx workflow scripts
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           path: ModSecurity-nginx
           fetch-depth: 1
       - name: Resolve latest Nginx version
@@ -300,6 +321,7 @@ jobs:
       - name: Get Nginx source
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: nginx/nginx
           ref: ${{ steps.nginx_ref.outputs.ref }}
           path: nginx
@@ -318,6 +340,7 @@ jobs:
       - name: Get Nginx tests
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: nginx/nginx-tests
           path: nginx/test
           fetch-depth: 0
@@ -341,6 +364,7 @@ jobs:
       - name: Get libModSecurity source
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: owasp-modsecurity/ModSecurity
           submodules: recursive
           path: nginx/objs/lib/ModSecurity
@@ -358,6 +382,7 @@ jobs:
       - name: Get ModSecurity-nginx source code
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           path: nginx/objs/lib/ModSecurity-nginx
       - name: Copy ModSecurity-nginx tests to nginx/test
         working-directory: nginx/test

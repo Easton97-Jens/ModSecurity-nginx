@@ -14,7 +14,6 @@
  */
 
 #include <ngx_config.h>
-#include <ctype.h>
 #include <stdint.h>
 
 #ifndef MODSECURITY_DDEBUG
@@ -491,7 +490,14 @@ ngx_http_modsecurity_normalize_content_type(ngx_pool_t *pool, ngx_str_t in)
     if (out.data == NULL || out.len == 0) return out;
     semi = (u_char *)ngx_strlchr(out.data, out.data + out.len, ';');
     if (semi) out.len = semi - out.data;
-    while (out.len > 0 && isspace((unsigned char) out.data[out.len - 1])) out.len--;
+    while (out.len > 0) {
+        u_char c = out.data[out.len - 1];
+        if (c != ' ' && c != '\t' && c != '\n' &&
+            c != '\r' && c != '\f' && c != '\v') {
+            break;
+        }
+        out.len--;
+    }
     out.data = ngx_pnalloc(pool, out.len);
     if (out.data == NULL) { out.len = 0; return out; }
     for (i = 0; i < out.len; i++) out.data[i] = ngx_tolower(in.data[i]);

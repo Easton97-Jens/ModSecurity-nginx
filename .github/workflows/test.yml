@@ -8,20 +8,6 @@ on:
 permissions: {}
 
 jobs:
-  phase4-unit-tests:
-    permissions:
-      contents: read
-    runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        compiler: [gcc, clang]
-    env:
-      CC: "/usr/bin/${{ matrix.compiler }}"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run standalone connector helper regressions
-        run: python3 -m unittest discover -s tests -p 'test_*runtime.py' -v
-
   build-linux:
     permissions:
       contents: read
