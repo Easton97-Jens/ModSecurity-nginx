@@ -5,9 +5,10 @@ Unreleased
     Safe and strict explicitly enable the additional connector policy; off
     leaves ModSecurity response inspection and native interventions active.
     [PR #377 - @Easton97-Jens]
-  - feat: handle late deny and redirect interventions explicitly. Safe logs
-    and continues after headers are sent; strict terminates the response.
-    A late intervention cannot replace an HTTP status or body already sent.
+  - feat: handle late deny and redirect interventions explicitly. After
+    headers are sent, safe logs and continues when event logging succeeds;
+    strict terminates the response. A late intervention cannot replace an HTTP
+    status or body already sent.
     [PR #377 - @Easton97-Jens]
   - feat: add optional JSON-lines events with requested and actual actions,
     response and WAF status, mode, reason, content type and rule ID. Redact
