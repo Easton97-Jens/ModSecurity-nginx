@@ -269,7 +269,7 @@ jobs:
 
   build-windows:
     name: windows-nginx-${{ matrix.nginx_version }}
-    runs-on: windows-2025
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
