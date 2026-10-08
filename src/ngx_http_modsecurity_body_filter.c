@@ -469,7 +469,9 @@ ngx_http_modsecurity_phase4_log_event(ngx_http_request_t *r, ngx_http_modsecurit
     }
     p = ngx_snprintf(dbuf, need,
         "{\"event\":\"phase4_intervention\",\"uri\":\"%V\",\"method\":\"%V\",\"response_status\":%ui,\"waf_status\":%i,\"content_type\":\"%V\",\"header_sent\":%s,\"mode\":\"%s\",\"wanted_action\":\"%s\",\"actual_action\":\"%s\",\"reason\":\"%s\",\"intervention\":\"%V\",\"rule_id\":\"%V\"}\n",
-        &euri,&emethod,(ngx_uint_t)r->headers_out.status,ctx ? (int) ctx->last_intervention_status : 0,&ect,header_sent,mode,wanted,actual,reason,&elog,&erule);
+        &euri, &emethod, (ngx_uint_t) r->headers_out.status,
+        ctx ? ctx->last_intervention_status : (ngx_int_t) 0,
+        &ect, header_sent, mode, wanted, actual, reason, &elog, &erule);
     ssize_t n = ngx_write_fd(mcf->phase4_log_file->fd, dbuf, p - dbuf);
     if (n < 0 || (size_t) n != (size_t) (p - dbuf)) {
         ngx_log_error(NGX_LOG_WARN, r->connection->log, ngx_errno,
