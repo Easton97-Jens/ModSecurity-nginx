@@ -1,3 +1,11 @@
+Unreleased
+----------
+
+  - feat: add opt-in Phase 4 safe/strict handling and optional JSON event
+    logging, with off as the default mode. Response body MIME selection and
+    inspection limits remain controlled by libModSecurity.
+    [PR #377 - @Easton97-Jens]
+
 v1.0.4 - 2025-May-21
 --------------------
 

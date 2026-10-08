@@ -236,10 +236,10 @@ explicitly when migrating, and move MIME selection into ModSecurity rules.
 The latest limit-ownership update retains those modes and their late policies.
 Existing `modsecurity_phase4_body_limit` values no longer limit inspection;
 migrate that policy to `SecResponseBodyLimit` and `SecResponseBodyLimitAction`.
-See [English](docs/phase4-handling.en.md) or
-[Deutsch](docs/phase4-handling.de.md) for the behavior, limits, logging schema,
-and examples. The documentation describes the source implementation; test
-results from the source repository are not validation of this migration.
+See the [Phase 4 documentation](docs/phase4-handling.en.md) for the behavior,
+limits, logging schema, and examples. The documentation describes the source
+implementation; test results from the source repository are not validation of
+this migration.
 
 modsecurity_use_error_log
 -----------
