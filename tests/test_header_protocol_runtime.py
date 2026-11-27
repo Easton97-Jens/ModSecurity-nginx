@@ -142,7 +142,10 @@ class HeaderProtocolRuntimeTests(unittest.TestCase):
             key = v2, sanity, version
             binary = Path(cls.directory.name) / f"header-{v2}-{sanity}-{version}"
             completed = subprocess.run(
+                # NGINX builds with -Wno-unused-parameter too; resolvers share
+                # one signature and need not use their offset.
                 compiler + ["-std=c99", "-Wall", "-Wextra", "-Werror",
+                            "-Wno-unused-parameter",
                             f"-DNGX_HTTP_V2={v2}",
                             f"-DMODSECURITY_SANITY_CHECKS={sanity}",
                             f"-Dnginx_version={version}", str(path), "-o", str(binary)],
