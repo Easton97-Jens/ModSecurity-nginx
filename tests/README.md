@@ -9,6 +9,21 @@ patch" on the project's README file.
 For more about nginx tests, check their repository:
 https://github.com/nginx/nginx-tests
 
+## Phase 4 suites need the source changes of #377
+
+Both procedures below run suites that test the Phase 4 directives and the
+request/response lifecycle fixes that
+[#377](https://github.com/owasp-modsecurity/ModSecurity-nginx/pull/377) adds
+to `src/`. Until those changes are in your checkout, failures in these suites
+are expected:
+
+- The native suites listed in `PHASE4_PENDING_SUITES` in
+  `.github/workflows/test.yml` fail. Most of them cannot start NGINX, because
+  their configuration uses the `modsecurity_phase4_*` directives.
+- All helper suites except `test_nginx_patch_runtime.py` fail.
+
+CI runs these suites in steps that do not block the job.
+
 ## Standalone Phase4 helper regressions
 
 Run from the repository root with Python 3 and GCC or Clang:
