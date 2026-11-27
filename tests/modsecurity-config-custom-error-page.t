@@ -313,12 +313,13 @@ EOF
 
 sub http_get_host {
 	my ($host, $url, $headers) = @_;
-	$headers = '' unless defined $headers;
+	# No bytes after the empty line: unread input makes NGINX close lingering,
+	# which sends EOF before the log phase writes the audit records read above.
+	$headers = defined $headers ? "$headers\n" : '';
 	return http(<<EOF);
 GET $url HTTP/1.0
 Host: $host
 $headers
-
 EOF
 }
 
