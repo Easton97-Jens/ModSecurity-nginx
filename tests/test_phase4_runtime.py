@@ -657,7 +657,8 @@ int main(int argc, char **argv)
         }
     } else if (strcmp(argv[1], "large-file-first-chunk") == 0) {
         if (sizeof(off_t) < 8) return 0;
-        buffer.file_last = (off_t)UINT32_MAX + (off_t)sizeof(payload);
+        /* 2^32 + 1: a length truncated to 32 bits would leave one byte to read. */
+        buffer.file_last = (off_t)UINT32_MAX + 2;
         native_result = 403; native_failed = 1; native_body_limit = 1;
         CHECK(ngx_http_modsecurity_body_filter(&request, &chain) == 403);
         CHECK(read_calls == 1 && append_calls == 1 && appended_bytes == 32768U);

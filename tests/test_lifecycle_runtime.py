@@ -303,6 +303,7 @@ static int run_access(const char *scenario, int parameter)
         CHECK(!created.intervention_failed);
         if (body.temp_file != NULL) CHECK(stat_calls == 2 && read_calls == append_calls && capture_calls == append_calls);
         if (strcmp(scenario, "file-large") == 0) CHECK(append_calls == 3 && max_read == 32768U);
+        else CHECK(append_calls == 1 && capture_calls == 1 && read_calls == (body.temp_file != NULL));
     } else {
         CHECK(result == 500 && created.intervention_failed && created.intervention_triggered);
         if (strcmp(scenario, "native-error") == 0) CHECK(intervention_calls[parameter / 10] == 0);
@@ -691,14 +692,21 @@ int main(int argc, char **argv)
         CHECK(ngx_http_modsecurity_prepare_location(&request, &destination) == NGX_OK);
         CHECK(origin.request_policy_superseded == expected);
         CHECK(ngx_http_modsecurity_get_module_ctx(&request) == (expected ? NULL : &origin));
-    } else if (strcmp(argv[1], "changed-policy") == 0 || strcmp(argv[1], "failed-audit") == 0 || strcmp(argv[1], "disabled-target") == 0) {
+    } else if (strcmp(argv[1], "changed-policy") == 0 || strcmp(argv[1], "failed-audit") == 0
+               || strcmp(argv[1], "failed-target-audit") == 0 || strcmp(argv[1], "disabled-target") == 0) {
         destination.rules_identity = &second;
         if (strcmp(argv[1], "disabled-target") == 0) destination.enable = 0;
         CHECK(ngx_http_modsecurity_prepare_location(&request, &destination) == NGX_OK);
         CHECK(origin.request_policy_superseded && ngx_http_modsecurity_get_module_ctx(&request) == NULL);
         if (destination.enable) { pool.cleanup = &target_cleanup; request.ctx = &target; }
-        if (strcmp(argv[1], "failed-audit") == 0) first.result = 0;
-        expected = first.result == 1 ? NGX_OK : NGX_ERROR;
+        /* The failing owner comes first, so the owner after it must still be audited. */
+        if (strcmp(argv[1], "failed-audit") == 0) {
+            pool.cleanup = &source_cleanup;
+            source_cleanup.next = &target_cleanup; target_cleanup.next = &foreign_cleanup;
+            first.result = 0;
+        }
+        if (strcmp(argv[1], "failed-target-audit") == 0) second.result = 0;
+        expected = first.result == 1 && second.result == 1 ? NGX_OK : NGX_ERROR;
         CHECK(ngx_http_modsecurity_log_handler(&request) == expected);
         CHECK(ngx_http_modsecurity_log_handler(&request) == expected);
         CHECK(first.logs == 1 && second.logs == (destination.enable ? 1 : 0));
@@ -973,7 +981,9 @@ class LifecyclePolicyTests(unittest.TestCase):
                 self.case(name)
 
     def test_owner_audit_failure_is_sticky_without_skipping_other_owners(self):
-        self.case("failed-audit")
+        for name in ("failed-audit", "failed-target-audit"):
+            with self.subTest(name=name):
+                self.case(name)
 
     def test_cleanup_audits_once_with_the_retained_pool(self):
         self.case("cleanup-fallback")

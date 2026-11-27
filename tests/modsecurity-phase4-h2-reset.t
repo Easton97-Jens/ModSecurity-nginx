@@ -146,8 +146,7 @@ my $released = $s->read(all => \@remaining, wait => 5);
 push @$frames, @$released;
 ok(stream_reset($frames, $strict), 'strict stream eventually receives a definite reset');
 is(stream_status($frames, $strict), 200, 'strict response started before its late denial');
-unlike(stream_body($frames, $strict), qr/\Q$forbidden\E/,
-	'Strict final body is withheld');
+is(stream_body($frames, $strict), '', 'Strict final body is withheld');
 ok(!stream_finished($frames, $strict), 'strict stream has no successful end of response');
 is(stream_body($frames, $held), $prefix . $tail, 'unrelated stream delivers its complete body');
 ok(stream_finished($frames, $held), 'unrelated stream ends normally');

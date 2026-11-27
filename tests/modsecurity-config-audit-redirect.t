@@ -13,7 +13,7 @@ use Test::Nginx;
 select STDERR; $| = 1;
 select STDOUT; $| = 1;
 
-my $t = Test::Nginx->new()->has(qw/http/)->plan(8);
+my $t = Test::Nginx->new()->has(qw/http/)->plan(11);
 
 $t->write_file_expand('nginx.conf', <<'EOF');
 %%TEST_GLOBALS%%
@@ -92,8 +92,12 @@ like($disabled, qr/disabled-policy-response/, 'disabled response preserved');
 $t->stop();
 my $source = $t->read_file('audit-source.log');
 my $target = $t->read_file('audit-target.log');
-my $source_records = () = $source =~ /^GET /mg;
+# Part B has the original request line, once per native audit record.
+for my $uri ('/same/missing', '/changed-start', '/disabled-start') {
+    my $count = () = $source =~ /^GET \Q$uri\E HTTP\/1\.[01]\r?$/mg;
+    is($count, 1, "one source audit for $uri");
+}
 my $target_records = () = $target =~ /^GET /mg;
-is($source_records, 3,
-    'one source audit per request, including changed and disabled targets');
 is($target_records, 1, 'only the changed policy creates a second audit owner');
+like($target, qr/^GET \/changed-start HTTP\/1\.[01]\r?$/m,
+    'the second audit owner records the changed-policy request');
